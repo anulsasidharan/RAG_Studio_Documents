@@ -1493,3 +1493,515 @@ The Designer review page reads `metadata.source` from the URL query string and s
 Using a string literal union (instead of `string`) means the compiler will error if a component tries to set `source = 'manual'` — a misspelling that would silently pass with a plain `string` type.
 
 ---
+
+## P1-3 · Python Pydantic Schemas
+
+### Pydantic & Schema Design
+
+**Q84: What is Pydantic v2 and why is it the right choice for FastAPI request/response validation?**
+
+Pydantic v2 is a data validation library that uses Python type annotations to define models. It is the right choice for FastAPI because:
+
+1. **FastAPI is built on Pydantic** — route parameter parsing, request body validation, and response serialisation all use Pydantic models natively.
+2. **Compiled Rust core** — Pydantic v2 rewrote its validation engine in Rust, making it 5–50× faster than v1.
+3. **Declarative constraints** — `Field(ge=0, le=100)` expresses business rules inline with the model definition, not in separate validation functions.
+4. **JSON Schema generation** — FastAPI auto-generates OpenAPI documentation from Pydantic models, giving developers a self-documenting API at `/docs`.
+5. **Serialisation control** — `model_config = ConfigDict(use_enum_values=True)` ensures enums are serialised as their string values in JSON responses, not as Python enum instances.
+
+The alternative — manual `request.json()` parsing with ad-hoc validation — produces verbose, error-prone code where validation logic is scattered across route handlers.
+
+---
+
+**Q85: What is `StrEnum` and why is it used instead of plain `Enum` for `CloudProvider`, `ChunkingStrategy`, etc.?**
+
+`StrEnum` (Python 3.11+) is an enum where every member's value is a string AND the enum itself is a subclass of `str`. This means:
+
+```python
+class CloudProvider(StrEnum):
+    AWS = "aws"
+
+# StrEnum: member IS a string
+isinstance(CloudProvider.AWS, str)  # True
+CloudProvider.AWS == "aws"          # True
+
+# Plain Enum: member is NOT a string
+class Provider(Enum):
+    AWS = "aws"
+isinstance(Provider.AWS, str)       # False
+Provider.AWS == "aws"               # False
+```
+
+In RAG Studio this matters in three places:
+1. **JSON serialisation** — `StrEnum` values serialise directly to `"aws"` without a `.value` call.
+2. **Database storage** — When written to a PostgreSQL `VARCHAR` column (via SQLAlchemy in P1-4), the string value passes through without conversion.
+3. **Comparison** — Route handlers can compare `config.cloud_provider == "aws"` without calling `.value`, reducing boilerplate.
+
+The constraint is that `StrEnum` is only available from Python 3.11. The project targets 3.11+, so this is fine.
+
+---
+
+**Q86: Explain the `RAGBaseModel` pattern. Why have a shared base class instead of configuring each model individually?**
+
+```python
+class RAGBaseModel(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        use_enum_values=True,
+    )
+```
+
+**`alias_generator=to_camel`** — Automatically generates a camelCase JSON alias for every snake_case field. FastAPI uses the alias in the request/response JSON while Python code uses the snake_case name:
+```python
+class ChunkingConfigSchema(RAGBaseModel):
+    chunk_size: int  # JSON key is "chunkSize", Python attr is "chunk_size"
+```
+
+**`populate_by_name=True`** — Without this, only the alias (`chunkSize`) would be accepted in model construction. With it, both `{"chunkSize": 512}` (JSON) and `{"chunk_size": 512}` (Python code) work. This matters in tests where you want to use Python keyword arguments directly.
+
+**`use_enum_values=True`** — Stores the enum's `.value` (a string) instead of the enum instance. This ensures serialisation produces `"aws"` rather than `<CloudProvider.AWS: 'aws'>`.
+
+Without a shared base, every schema would repeat this `model_config` block, and a future change (e.g., adding `from_attributes=True` for ORM mapping) would require touching every class.
+
+---
+
+**Q87: How does `alias_generator=to_camel` interact with the TypeScript frontend?**
+
+The TypeScript frontend uses camelCase (`chunkSize`, `topK`, `cloudProvider`) everywhere — both in the type definitions (P1-2) and in the JSON payloads it sends and receives.
+
+Python's convention is snake_case (`chunk_size`, `top_k`, `cloud_provider`). Without `alias_generator=to_camel`, FastAPI would expect JSON with snake_case keys, causing a mismatch:
+
+```
+Frontend sends: { "chunkSize": 512, "cloudProvider": "aws" }
+FastAPI without alias: ValidationError — field "chunk_size" is required
+FastAPI with alias:  ✅ maps "chunkSize" → chunk_size automatically
+```
+
+The `to_camel` function from `pydantic.alias_generators` applies `snake_case → camelCase` to every field name. The `populate_by_name=True` setting ensures the backend's own tests and internal service calls can still use Python snake_case without wrapping everything in the JSON alias.
+
+---
+
+**Q88: Why are the schema files split into five files (`pipeline.py`, `designer.py`, `autopilot.py`, `evaluation.py`, `deployment.py`) instead of one?**
+
+Each file groups schemas by **API domain concern**, mirroring the router structure that will be built in P4–P8:
+
+| File | Domain | Consumed by |
+|------|---------|------------|
+| `pipeline.py` | Core data model — the RAG config DSL | All other schema files; both modes |
+| `designer.py` | Designer API request/response shapes | `routers/designer.py` (P4-2, P4-3, P4-4) |
+| `autopilot.py` | Build lifecycle + agent decisions | `routers/autopilot.py` (P6-9) |
+| `evaluation.py` | RAGAS metrics + failure analysis | `routers/evaluation.py` (P8-3) |
+| `deployment.py` | Deployment lifecycle | `routers/deployment.py` (P8-4) |
+
+`pipeline.py` is deliberately dependency-free (no imports from other schema files). All other files import from it. This prevents circular imports — if `autopilot.py` needed to import from `evaluation.py` and vice versa, the import graph would cycle. The current structure is a strict DAG: `pipeline → {designer, autopilot, evaluation, deployment}`.
+
+---
+
+**Q89: Explain how `PipelineConfigurationSchema` acts as the shared contract between Designer mode and Autopilot mode.**
+
+`PipelineConfigurationSchema` is accepted or produced by endpoints in both modes:
+
+- **Designer mode** — `POST /api/designer/config` accepts it as `SaveConfigRequest.config`. The user builds it stage by stage in the UI.
+- **Autopilot mode** — `GET /api/autopilot/build/{id}/result` returns it as `BuildResultSchema.config`. The agent orchestrator produces it after optimisation.
+- **Bidirectional handoff** — `StartBuildRequest.base_config` is an optional `PipelineConfigurationSchema` from the Designer "Optimize This" flow; `DecisionExplainer` sends the Autopilot's result back to the Designer as a `PipelineConfigurationSchema`.
+
+This single type is the Rosetta Stone of the platform — it is the common language that both modes speak. Defining it once in `pipeline.py` (and mirroring it in TypeScript as `PipelineConfiguration`) ensures both sides always agree on the shape.
+
+---
+
+**Q90: What does `Field(ge=128, le=4096)` do in `ChunkingConfigSchema.chunk_size`, and what happens if the constraint is violated?**
+
+`Field(ge=128, le=4096)` attaches a `GreaterThanEqual=128` and `LessThanOrEqual=4096` constraint to the field. Pydantic v2 validates this during model instantiation.
+
+If a request body sends `{ "chunkSize": 64 }`:
+```python
+ChunkingConfigSchema(chunk_size=64)
+# Raises: pydantic.ValidationError
+# 1 validation error for ChunkingConfigSchema
+# chunk_size
+#   Input should be greater than or equal to 128 [type=greater_than_equal, input_value=64]
+```
+
+FastAPI catches this `ValidationError` and returns a `422 Unprocessable Entity` response with a structured error body:
+```json
+{
+  "detail": [{
+    "loc": ["body", "stages", "chunking", "chunkSize"],
+    "msg": "Input should be greater than or equal to 128",
+    "type": "greater_than_equal"
+  }]
+}
+```
+
+The 128-token lower bound prevents chunks too small to carry semantic meaning. The 4096 upper bound prevents chunks that exceed most embedding models' `maxTokens` limit (the largest in the catalog is 8191, but 4096 is a safe production ceiling that keeps retrieval sets manageable).
+
+---
+
+**Q91: Why is `DeploymentInfoSchema` defined in both `autopilot.py` and the data it shares with `deployment.py`? How is duplication avoided?**
+
+`DeploymentInfoSchema` in `autopilot.py` represents deployment info embedded inside `BuildResultSchema` — it is a summary that the Autopilot includes in its final result.
+
+`DeploymentStatusResponse` in `deployment.py` represents the full deployment record returned by `GET /api/deployment/{id}/status`.
+
+They share the same fields but serve different contexts. Rather than duplicating:
+- `autopilot.py`'s `DeploymentInfoSchema` is a **nested embedded type** within `BuildResultSchema` (lightweight: endpoint + status + deployed_at).
+- `deployment.py`'s schemas are **standalone API responses** for the full deployment management API (includes pagination, environment, image_tag, error).
+
+There is intentional overlap — both have `endpoint`, `status`, `deployed_at`. This is acceptable because they are used in different response shapes. The alternative (sharing one class) would create a coupling between the autopilot and deployment schema modules, which are on separate roadmap paths (P6 vs P8).
+
+---
+
+**Q92: What is the `__init__.py` barrel export pattern and what problem does it solve?**
+
+```python
+# schemas/__init__.py
+from app.schemas.pipeline import PipelineConfigurationSchema, CloudProvider
+from app.schemas.designer import SaveConfigRequest
+# ...
+```
+
+Without the barrel:
+```python
+# Every router must know which sub-module holds which class
+from app.schemas.pipeline import PipelineConfigurationSchema
+from app.schemas.designer import SaveConfigRequest
+from app.schemas.autopilot import BuildStatusResponse
+```
+
+With the barrel:
+```python
+# Every router uses one clean import
+from app.schemas import PipelineConfigurationSchema, SaveConfigRequest, BuildStatusResponse
+```
+
+Benefits:
+1. **Discoverability** — `from app.schemas import <Tab>` in an IDE shows all available schemas.
+2. **Refactoring isolation** — If `PipelineConfigurationSchema` moves from `pipeline.py` to a new `core.py`, only `__init__.py` needs updating, not every router that imports it.
+3. **`__all__` documentation** — The explicit `__all__` list in `__init__.py` serves as the authoritative list of public API types, useful for documentation generation.
+
+---
+
+**Q93: How do the `EvaluationMetrics` and `FinalMetricsSchema` in the evaluation module relate, and why have two separate metric types?**
+
+```python
+# evaluation.py
+class EvaluationMetrics(RAGBaseModel):
+    faithfulness: float
+    answer_relevance: float
+    context_precision: float
+    context_recall: float
+    avg_latency_ms: float | None = None
+    cost_per_query: float | None = None
+
+# autopilot.py
+class FinalMetricsSchema(RAGBaseModel):
+    # Identical fields
+    faithfulness: float
+    # ...
+```
+
+They are intentionally separate because they appear in different response types with different ownership:
+- **`EvaluationMetrics`** is owned by the Evaluation module (`EvaluationRunResponse`). It is produced by `POST /api/evaluation/run` — a standalone, on-demand evaluation.
+- **`FinalMetricsSchema`** is embedded in `BuildResultSchema` returned by `GET /api/autopilot/build/{id}/result`. It is produced by the Autopilot's internal evaluation step.
+
+In a future phase, they may diverge: `EvaluationMetrics` might add per-question breakdowns, while `FinalMetricsSchema` might add iteration-over-iteration trend data. Keeping them separate now avoids premature coupling. A shared base class could be introduced when the fields genuinely converge.
+
+---
+
+**Q94: What is `FailureAnalysisResult` and how does it drive the Autopilot's iteration decision?**
+
+```python
+class FailureAnalysisResult(RAGBaseModel):
+    total_failures: int
+    failure_rate: float
+    categories: list[FailureCategory]
+    summary: str
+```
+
+Where `FailureCategory.category` is one of:
+- `"hallucination"` — LLM generated a factual claim not supported by the retrieved context
+- `"retrieval_quality"` — correct answers exist in the corpus but were not retrieved
+- `"context_gap"` — the corpus genuinely does not contain the answer
+- `"format_error"` — the LLM response structure was incorrect (e.g., not valid JSON when requested)
+
+The Autopilot orchestrator's `decide_iteration` node reads the `categories` list to choose which agent to re-run:
+- `"hallucination"` → lower LLM temperature or strengthen the grounding prompt
+- `"retrieval_quality"` → tune `top_k`, enable reranking, or switch retrieval strategy
+- `"context_gap"` → flag for the user (no pipeline fix can help if the data isn't there)
+- `"format_error"` → adjust the system prompt's output format instruction
+
+Without structured failure categories, the iteration loop would have to re-run all agents blindly on every failure, which is costly. The typed `FailureAnalysisResult` enables **targeted iteration** — only the relevant agent stage is re-run.
+
+---
+
+**Q95: Why does `BuildStatusResponse.stages` use `dict[str, StageStatusSchema]` rather than a `list[StageStatusSchema]` with a `stage_id` field?**
+
+```python
+stages: dict[str, StageStatusSchema]
+# e.g. { "analyze": StageStatus, "chunking": StageStatus, ... }
+```
+
+A dict provides **O(1) lookup** by stage ID on both the backend and frontend:
+
+**Backend** (inside the orchestrator):
+```python
+state["stages"]["embedding"].status = "complete"  # Direct update, no iteration
+```
+
+**Frontend** (React component):
+```typescript
+const embeddingStatus = build.stages["embedding"]?.status;  // O(1), no .find()
+```
+
+With a list, every update or lookup would require iterating to find the matching entry:
+```python
+stage = next(s for s in state["stages"] if s.stage_id == "embedding")  # O(n)
+```
+
+The trade-off: a dict does not preserve insertion order (in older Python), but Python 3.7+ dicts are ordered by insertion. And the UI renders stages in a fixed order from a constant array, not from the dict's iteration order — so order correctness is irrelevant here.
+
+---
+
+**Q96: What is `from_attributes=True` in Pydantic's ConfigDict, and when will it be needed for these schemas?**
+
+`from_attributes=True` (formerly `orm_mode=True` in Pydantic v1) allows Pydantic to construct a model from an ORM object's attributes rather than from a dict:
+
+```python
+# Without from_attributes=True — must convert ORM object to dict first
+pipeline_orm = await session.get(PipelineConfigDB, config_id)
+response = PipelineConfigurationSchema(**pipeline_orm.__dict__)  # fragile
+
+# With from_attributes=True — can pass ORM object directly
+response = PipelineConfigurationSchema.model_validate(pipeline_orm)
+```
+
+It is not set on `RAGBaseModel` yet because:
+- P1-3 only defines schemas — no ORM models exist yet (they come in P1-4).
+- Setting it prematurely has no benefit and slightly increases model validation overhead.
+
+In **P1-4** (database schema and migrations), SQLAlchemy ORM models will be created. The service layer (P4) will use `model_validate(orm_object)` to convert ORM rows to response schemas. At that point, `from_attributes=True` will be added to `RAGBaseModel` so all schemas can accept ORM objects without boilerplate conversion.
+
+---
+
+## P1-4 · Database Schema & Migrations
+
+**Q97: Why use SQLAlchemy 2.0's `Mapped` and `mapped_column` instead of the older Column-based syntax?**
+
+SQLAlchemy 2.0 introduced a new `Mapped[T]` annotation style that brings full type-safety to ORM models:
+
+```python
+# Old style (SQLAlchemy 1.x) — no type checking
+class Project(Base):
+    __tablename__ = "projects"
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    name = Column(String(255), nullable=False)
+
+# New style (SQLAlchemy 2.0) — fully typed
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+```
+
+The `Mapped[T]` annotation is read by mypy/pyright to validate attribute access, catch type mismatches, and enable IDE autocomplete. The Python type annotation is the source of truth; `mapped_column()` provides the SQL-specific options.
+
+---
+
+**Q98: What is `DeclarativeBase` and why does RAG Studio define a custom `Base` class rather than using `declarative_base()`?**
+
+`DeclarativeBase` is SQLAlchemy 2.0's class-based replacement for the older `declarative_base()` function:
+
+```python
+# Old (SQLAlchemy 1.x)
+from sqlalchemy.orm import declarative_base
+Base = declarative_base()
+
+# New (SQLAlchemy 2.0) — preferred
+from sqlalchemy.orm import DeclarativeBase
+
+class Base(DeclarativeBase):
+    pass
+```
+
+Using a class allows shared class-level configuration (type annotation maps, registry overrides) to propagate to all ORM models. `TimestampMixin` is kept as a separate mixin so models that do not need timestamps can still inherit `Base` cleanly.
+
+---
+
+**Q99: Explain the `TimestampMixin` pattern. Why is it a mixin rather than a base class?**
+
+`TimestampMixin` adds `created_at` and `updated_at` columns to any model that opts in:
+
+```python
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+```
+
+As a mixin, models use `class Project(Base, TimestampMixin)` — multiple inheritance without coupling `Base` to timestamps. `server_default=func.now()` lets PostgreSQL set the value accurately regardless of application time drift. `onupdate=func.now()` is a SQLAlchemy client-side trigger fired when the ORM detects a changed row.
+
+---
+
+**Q100: Why are `config`, `requirements`, `stages`, and `messages` stored as JSONB rather than normalised columns?**
+
+JSONB (PostgreSQL binary JSON) is appropriate here because:
+
+1. **Schema volatility** — pipeline configurations evolve; a new provider or strategy option does not require a new column.
+2. **Nested objects** — `PipelineConfigurationSchema` has deeply nested sub-schemas. Normalising them would require 20+ join tables.
+3. **Indexed queries** — JSONB supports GIN indexes for key-existence queries (`WHERE config @> '{"cloudProvider":"aws"}'`).
+4. **Clean boundary** — the service layer serialises Pydantic schemas to dicts (`.model_dump()`) before writing and deserialises on read (`.model_validate()`).
+
+Stable, frequently-queried attributes like `cloud_provider`, `status`, and `source` remain as typed columns for direct SQL filtering.
+
+---
+
+**Q101: How does RAG Studio configure `alembic/env.py` for async PostgreSQL?**
+
+```python
+async def run_migrations_online() -> None:
+    engine = create_async_engine(get_settings().database_url)
+    async with engine.connect() as conn:
+        await conn.run_sync(do_run_migrations)
+    await engine.dispose()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    asyncio.run(run_migrations_online())
+```
+
+Key decisions: `create_async_engine` uses the `asyncpg` driver matching the app. `conn.run_sync(do_run_migrations)` bridges the async connection to Alembic's sync `context.run_migrations()` API. `get_settings()` reads `DATABASE_URL` from env, so no URL is hard-coded in `alembic.ini`.
+
+---
+
+**Q102: Why is the initial migration handwritten rather than autogenerated?**
+
+Autogenerate requires a live database to diff against. A handwritten migration:
+
+1. Is self-contained — reviewable in a PR without running a database.
+2. Is deterministic — not dependent on an existing database state.
+3. Documents intent explicitly — `server_default`, `ondelete`, index names are all visible.
+
+Future migrations can be autogenerated (`alembic revision --autogenerate`) once a baseline schema exists to diff against.
+
+---
+
+**Q103: Explain the foreign key `ondelete` strategies across the 5 tables.**
+
+| Relationship | `ondelete` | Reasoning |
+|---|---|---|
+| `pipeline_configs.project_id` | `CASCADE` | Config records are meaningless without their project. |
+| `autopilot_builds.project_id` | `CASCADE` | Build history belongs to the project. |
+| `evaluation_runs.config_id` | `CASCADE` | An evaluation without its config is orphaned. |
+| `evaluation_runs.build_id` | `SET NULL` | Metrics remain valid even if the build is deleted; `build_id` becomes NULL. |
+| `deployments.config_id` | `CASCADE` | A deployment record without its config is unusable. |
+
+---
+
+**Q104: How does `from_attributes=True` enable ORM-to-Pydantic conversion?**
+
+It allows Pydantic to read attributes from an ORM object using `getattr()` instead of requiring a plain dict:
+
+```python
+# Without from_attributes=True — manual dict conversion required
+pipeline_orm = await session.get(PipelineConfig, config_id)
+schema = PipelineConfigurationSchema(**pipeline_orm.__dict__)   # fragile
+
+# With from_attributes=True (added in P1-4)
+schema = PipelineConfigurationSchema.model_validate(pipeline_orm)  # clean
+```
+
+It was omitted from P1-3 because no ORM models existed yet, and was added to `RAGBaseModel` in P1-4 once the model layer was introduced.
+
+---
+
+**Q105: What is the purpose of `app/models/__init__.py` importing all model classes?**
+
+Alembic inspects `Base.metadata` to discover tables for autogenerate. `Base.metadata` only knows about tables whose model modules have been imported. The `__init__.py` imports all model classes as a side-effect:
+
+```python
+from app.models.project import Project
+from app.models.pipeline_config import PipelineConfig
+# ... etc.
+```
+
+Then `env.py` does `from app.models import Base`, which triggers all model imports and registers all five tables with `Base.metadata`. Without this, autogenerate produces empty migrations.
+
+---
+
+**Q106: Why does `EvaluationRun` have a nullable `build_id` FK with `SET NULL`?**
+
+Evaluation runs can be triggered in two contexts:
+- **Designer-mode** (`POST /api/evaluation/run`) — user manually evaluates a saved config; no build involved → `build_id = NULL`.
+- **Autopilot-triggered** — the Evaluation Agent runs RAGAS during an automated build → `build_id` references the parent build.
+
+`SET NULL` on delete means: if the parent build is deleted, the evaluation record (and its metric scores) are preserved with `build_id = NULL`, rather than being cascade-deleted.
+
+---
+
+**Q107: What does `server_default="{}"` on a JSONB column achieve vs Python-side `default=dict`?**
+
+`server_default="{}"` — the database supplies `{}` for `INSERT` statements that omit the column, including raw SQL inserts and migrations. `default=dict` — SQLAlchemy calls `dict()` in Python when constructing the ORM object, which means it only applies to Python-originated inserts.
+
+`server_default` is preferred because it works even when rows are inserted by tools that bypass the ORM (migrations, seed scripts). Using a mutable `default={}` (a dict literal) would be a bug — all instances would share the same dict object; `default=dict` (callable) is safe but `server_default` provides stronger guarantees.
+
+---
+
+**Q108: What is `alembic.ini`s `file_template` setting?**
+
+`file_template = %%(rev)s_%%(slug)s` controls migration filenames. Instead of the default timestamp-prefixed `2026042900001234_initial_schema.py`, it produces `001_initial_schema.py`. Short revision-ID-prefixed names are easier to reference in `alembic downgrade 001` and more readable in `git log`. The `%%` double-escaping is required because `alembic.ini` uses Python `configparser`, which treats `%` as an interpolation character.
+
+---
+
+**Q109: Walk through the full lifecycle of saving a Designer config to the database.**
+
+```python
+# 1. FastAPI receives POST /api/designer/config — Pydantic validates
+async def save_config(body: SaveConfigRequest, session: AsyncSession):
+
+    # 2. Serialise Pydantic schema to dict for JSONB
+    config_dict = body.config.model_dump(by_alias=True)  # camelCase
+
+    # 3. Create ORM object
+    record = PipelineConfig(
+        project_id=uuid.UUID(body.project_id),
+        name=body.name,
+        cloud_provider=body.config.cloud_provider,
+        config=config_dict,
+        source=body.config.metadata.source,
+    )
+
+    # 4. Persist
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+
+    # 5. Deserialise ORM → Pydantic (from_attributes=True)
+    config_schema = PipelineConfigurationSchema.model_validate(record.config)
+    return SaveConfigResponse(id=str(record.id), config=config_schema, ...)
+```
+
+Flow: **JSON → Pydantic validate → dict → JSONB → ORM → dict → Pydantic → JSON**.
+
+---
+
+**Q110: What indexes does the initial migration create and why?**
+
+| Index | Table | Column | Why |
+|---|---|---|---|
+| `ix_projects_user_id` | `projects` | `user_id` | List all projects for a user — most common query. |
+| `ix_pipeline_configs_project_id` | `pipeline_configs` | `project_id` | List configs for a project. |
+| `ix_autopilot_builds_project_id` | `autopilot_builds` | `project_id` | List builds for a project. |
+| `ix_evaluation_runs_config_id` | `evaluation_runs` | `config_id` | List eval history for a config. |
+| `ix_evaluation_runs_build_id` | `evaluation_runs` | `build_id` | Fetch evals linked to a specific build. |
+| `ix_deployments_config_id` | `deployments` | `config_id` | List deployments for a config. |
+
+All FK columns that are used as filter predicates are indexed. Primary keys are automatically indexed by PostgreSQL. `status` on `autopilot_builds` is not indexed initially — once volume grows, a partial index on `status = 'running'` is more efficient than a full index.
+
+---

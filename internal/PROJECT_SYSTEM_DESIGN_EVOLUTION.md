@@ -522,6 +522,112 @@ graph LR
 
 ---
 
+---
+
+## Phase P1-3 · Python Pydantic Schemas
+
+**What changed:** The `apps/api/app/schemas/` package now provides Pydantic v2 schemas for every API boundary. These are the Python mirror of the TypeScript types (P1-2) and use the same enum values as the JSON catalogs (P1-1). The shared contract is now complete on both sides.
+
+### Design Level 8 — Python Schema Layer
+
+```mermaid
+graph TB
+    subgraph SCHEMAS["apps/api/app/schemas/ (Pydantic Schema Layer)"]
+        INIT["__init__.py\n(barrel re-export ~60 classes)"]
+
+        subgraph PIPELINE["pipeline.py\n(no imports from other schema files)"]
+            ENUMS["StrEnum types\nCloudProvider · ChunkingStrategy\nVectorStoreProvider · RetrievalStrategy\nEmbeddingProvider · GenerationProvider\nMemoryType · OutputFormat\nSimilarityMetric · FilterOperator"]
+            BASE["RAGBaseModel\nalias_generator=to_camel\npopulate_by_name=True\nuse_enum_values=True"]
+            STAGE_SCHEMAS["Stage Schemas\nDataIngestionConfigSchema\nChunkingConfigSchema\nEmbeddingConfigSchema\nVectorStoreConfigSchema\nRetrievalConfigSchema\nRerankingConfigSchema\nGenerationConfigSchema\nRoutingConfigSchema\nMemoryConfigSchema\nEvaluationConfigSchema"]
+            TOP_LEVEL["PipelineConfigurationSchema\nCostEstimateSchema\nPerformanceEstimateSchema\nPipelineStagesSchema\nPipelineMetadataSchema"]
+        end
+
+        subgraph DESIGNER["designer.py"]
+            D1["SaveConfigRequest\nSaveConfigResponse\nConfigListItem\nConfigListResponse"]
+            D2["ExportRequest\nExportResponse\nCostRequest\nCostResponse"]
+        end
+
+        subgraph AUTOPILOT["autopilot.py"]
+            A1["BuildRequirementsSchema\nTargetMetricsSchema\nStartBuildRequest\nStartBuildResponse"]
+            A2["StageStatusSchema\nBuildMessageSchema\nAgentDecisionSchema\n(per-agent sub-schemas)"]
+            A3["BuildResultSchema\nFinalMetricsSchema\nBuildStatusResponse\nDeploymentInfoSchema"]
+        end
+
+        subgraph EVALUATION["evaluation.py"]
+            E1["EvaluationRunRequest\nTestSetEntry\nEvaluationMetrics"]
+            E2["FailureCategory\nFailureAnalysisResult\nEvaluationRunResponse"]
+            E3["CompareConfigsRequest\nMetricDelta\nCompareConfigsResponse"]
+        end
+
+        subgraph DEPLOYMENT["deployment.py"]
+            DP1["DeployRequest\nDeployResponse"]
+            DP2["DeploymentStatusResponse\nDeploymentListResponse"]
+        end
+
+        PIPELINE --> DESIGNER
+        PIPELINE --> AUTOPILOT
+        PIPELINE --> EVALUATION
+        PIPELINE --> DEPLOYMENT
+        DESIGNER --> INIT
+        AUTOPILOT --> INIT
+        EVALUATION --> INIT
+        DEPLOYMENT --> INIT
+        PIPELINE --> INIT
+    end
+
+    subgraph CONSUMERS["Future Consumers (P4–P8)"]
+        ROUTER_D["routers/designer.py\n(P4-2, P4-3, P4-4)"]
+        ROUTER_A["routers/autopilot.py\n(P6-9)"]
+        ROUTER_E["routers/evaluation.py\n(P8-3)"]
+        ROUTER_DP["routers/deployment.py\n(P8-4)"]
+    end
+
+    INIT --> ROUTER_D
+    INIT --> ROUTER_A
+    INIT --> ROUTER_E
+    INIT --> ROUTER_DP
+```
+
+### Design Level 8b — Schema ↔ Catalog ↔ TypeScript Contract
+
+```mermaid
+graph LR
+    subgraph JSON["data/ (JSON Catalogs — P1-1)"]
+        EMB_J["embeddings.json\nmodel IDs"]
+        GEN_J["generation.json\nmodel IDs"]
+        CHK_J["chunking-strategies.json\nstrategy IDs"]
+    end
+
+    subgraph TS["apps/web/src/types/ (TypeScript — P1-2)"]
+        TS_P["pipeline.ts\nCloudProvider · ChunkingStrategy\nPipelineConfiguration"]
+        TS_A["autopilot.ts\nAutopilotBuild · BuildResult"]
+    end
+
+    subgraph PY["apps/api/app/schemas/ (Python — P1-3)"]
+        PY_P["pipeline.py\nCloudProvider · ChunkingStrategy\nPipelineConfigurationSchema"]
+        PY_A["autopilot.py\nBuildStatusResponse · BuildResultSchema"]
+    end
+
+    EMB_J -- "model IDs validated against" --> PY_P
+    GEN_J -- "model IDs validated against" --> PY_P
+    CHK_J -- "strategy IDs validated against" --> PY_P
+
+    TS_P -- "camelCase ↔ snake_case\nalias_generator=to_camel" --> PY_P
+    TS_A -- "camelCase ↔ snake_case" --> PY_A
+
+    PY_P -- "same enum values" --> TS_P
+    PY_A -- "same build lifecycle shape" --> TS_A
+```
+
+**Key decisions:**
+- `RAGBaseModel` shared base with `alias_generator=to_camel` — one change propagates camelCase aliases to all ~60 schemas
+- `StrEnum` for all enumerated values — members ARE strings, so they serialise and compare without `.value` calls
+- `pipeline.py` has zero imports from other schema files — it is the leaf of the schema dependency graph, preventing circular imports
+- `__init__.py` barrel with explicit `__all__` — single import point for all routers; refactoring a schema's file location only requires updating the barrel
+- `from_attributes=True` deliberately omitted — will be added to `RAGBaseModel` in P1-4 when ORM models are introduced
+
+---
+
 ## Design Progression Summary
 
 | Phase | Layer Added | Key Artefact |
@@ -533,5 +639,147 @@ graph LR
 | P0-5 | Frontend application | `apps/web/src/` — Next.js 14 App Router, Zustand, API client, Tailwind, Dockerfile |
 | P1-1 | Shared data layer | `data/` — 9 JSON catalogs covering models, strategies, pricing, and templates |
 | P1-2 | TypeScript type system | `apps/web/src/types/` — 4 type files + barrel export; all catalog shapes typed |
+| P1-3 | Python schema layer | `apps/api/app/schemas/` — 6 files, ~60 Pydantic v2 schemas; camelCase aliases; StrEnum types |
+| P1-4 | Database + migrations | `apps/api/app/models/` — 5 ORM models; `alembic/` — initial migration, 5 tables, indexes, FK constraints |
 
-> **Next phases** will add Python Pydantic schemas (`P1-3`) and the database schema and migrations (`P1-4`) — completing the shared data contract before backend core services begin.
+---
+
+## Phase P1-4 — Database Schema & Migrations
+
+### Design Level 9 — ORM Model Layer
+
+The database layer sits between the Pydantic schema layer and the service/route layer. It introduces 5 SQLAlchemy 2.0 ORM models with typed `Mapped[T]` annotations, JSONB columns for nested structures, and Alembic migrations for async PostgreSQL.
+
+```mermaid
+erDiagram
+    projects {
+        UUID id PK
+        UUID user_id
+        varchar name
+        text description
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    pipeline_configs {
+        UUID id PK
+        UUID project_id FK
+        varchar name
+        varchar version
+        varchar cloud_provider
+        jsonb config
+        varchar source
+        text build_id
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    autopilot_builds {
+        UUID id PK
+        UUID project_id FK
+        varchar status
+        int progress
+        varchar current_stage
+        int iteration
+        jsonb requirements
+        jsonb stages
+        jsonb messages
+        jsonb result
+        text error
+        timestamptz completed_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    evaluation_runs {
+        UUID id PK
+        UUID config_id FK
+        UUID build_id FK
+        varchar status
+        jsonb metrics
+        jsonb failure_analysis
+        int test_set_size
+        text error
+        timestamptz completed_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    deployments {
+        UUID id PK
+        UUID config_id FK
+        varchar provider
+        varchar environment
+        varchar status
+        text endpoint
+        text health_check_url
+        varchar docker_image_tag
+        jsonb deployment_info
+        timestamptz deployed_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    projects ||--o{ pipeline_configs : "has"
+    projects ||--o{ autopilot_builds : "has"
+    pipeline_configs ||--o{ evaluation_runs : "evaluated by"
+    pipeline_configs ||--o{ deployments : "deployed via"
+    autopilot_builds ||--o{ evaluation_runs : "triggers (nullable)"
+```
+
+---
+
+### Design Level 9b — ORM to Schema Data Flow
+
+```mermaid
+sequenceDiagram
+    participant Client as Next.js Client
+    participant API as FastAPI Router
+    participant Schema as Pydantic Schema
+    participant ORM as SQLAlchemy ORM
+    participant DB as PostgreSQL
+
+    Client->>API: POST /api/designer/config (camelCase JSON)
+    API->>Schema: SaveConfigRequest.model_validate(json)
+    Schema->>Schema: PipelineConfigurationSchema validates nested stages
+    Schema->>ORM: .model_dump(by_alias=True) produces camelCase dict
+    ORM->>DB: INSERT INTO pipeline_configs (config JSONB ...)
+    DB-->>ORM: row with server_default timestamps
+    ORM-->>Schema: model_validate(orm_obj) via from_attributes=True
+    Schema-->>API: SaveConfigResponse (camelCase JSON)
+    API-->>Client: 201 Created
+```
+
+---
+
+### Design Level 9c — Alembic Migration Architecture
+
+```mermaid
+graph TB
+    subgraph "Migration Tooling"
+        INI[alembic.ini]
+        ENV[alembic/env.py - asyncio.run + create_async_engine]
+        MAKO[alembic/script.py.mako]
+        V001[alembic/versions/001_initial_schema.py]
+    end
+
+    subgraph "Python App Layer"
+        SETTINGS[app/config.py - get_settings DATABASE_URL]
+        BASE[app/models/base.py - Base + TimestampMixin]
+        INIT[app/models/__init__.py - registers all metadata]
+    end
+
+    subgraph "PostgreSQL"
+        PG[(ragstudio DB)]
+        AM[alembic_version table]
+    end
+
+    INI --> ENV
+    ENV --> SETTINGS
+    ENV --> INIT
+    INIT --> BASE
+    ENV --> V001
+    V001 --> PG
+    PG --> AM
+    SCRIPTS[scripts/migrate.sh] --> ENV
+```

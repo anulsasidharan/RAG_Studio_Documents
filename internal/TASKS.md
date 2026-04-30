@@ -177,48 +177,48 @@ Create all type files under `apps/web/src/types/`:
 
 ---
 
-### P1-3 · Python Pydantic Schemas
+### P1-3 · Python Pydantic Schemas ✅
 **Branch:** `feature/p1-python-schemas`
 
 > **Depends on:** P0-4, P1-1 merged
 
 Create all schema files under `apps/api/app/schemas/`:
 
-- [ ] `apps/api/app/schemas/pipeline.py`
+- [x] `apps/api/app/schemas/pipeline.py`
   - `CloudProvider` enum, `ChunkingStrategy` enum, `VectorStoreProvider` enum, `RetrievalStrategy` enum
   - `ChunkingConfigSchema`, `EmbeddingConfigSchema`, `VectorStoreConfigSchema`
   - `RetrievalConfigSchema`, `RerankingConfigSchema`, `GenerationConfigSchema`
   - `PipelineConfigurationSchema`, `CostEstimateSchema`
-- [ ] `apps/api/app/schemas/designer.py`
+- [x] `apps/api/app/schemas/designer.py`
   - `SaveConfigRequest`, `SaveConfigResponse`, `ExportRequest`, `ExportResponse`, `CostRequest`
-- [ ] `apps/api/app/schemas/autopilot.py`
+- [x] `apps/api/app/schemas/autopilot.py`
   - `BuildRequirementsSchema`, `StartBuildRequest`, `StartBuildResponse`
   - `BuildStatusResponse`, `BuildResultSchema`, `AgentDecisionSchema`
-- [ ] `apps/api/app/schemas/evaluation.py`
+- [x] `apps/api/app/schemas/evaluation.py`
   - `EvaluationRunRequest`, `EvaluationMetrics`, `FailureAnalysisResult`
-- [ ] `apps/api/app/schemas/deployment.py`
+- [x] `apps/api/app/schemas/deployment.py`
   - `DeployRequest`, `DeployResponse`, `DeploymentStatusResponse`
-- [ ] `apps/api/app/schemas/__init__.py` — re-exports
+- [x] `apps/api/app/schemas/__init__.py` — re-exports
 
 ---
 
-### P1-4 · Database Schema & Migrations
+### ✅ P1-4 · Database Schema & Migrations
 **Branch:** `feature/p1-database-schema`
 
 > **Depends on:** P0-4, P1-3, P0-2 merged
 
-- [ ] Set up Alembic: `alembic init alembic` inside `apps/api/`
-- [ ] Configure `alembic/env.py` to read `DATABASE_URL` from settings
-- [ ] Create SQLAlchemy base models in `apps/api/app/models/`:
-  - `apps/api/app/models/project.py` — `Project` (id, user_id, name, description, timestamps)
-  - `apps/api/app/models/pipeline_config.py` — `PipelineConfig` (id, project_id, name, version, cloud_provider, config JSONB, source, build_id, timestamps)
-  - `apps/api/app/models/build_history.py` — `AutopilotBuild` (id, project_id, status, progress, current_stage, iteration, requirements JSONB, stages JSONB, messages JSONB, result JSONB, error, timestamps)
-  - `apps/api/app/models/evaluation_run.py` — `EvaluationRun` (id, config_id, build_id, metrics JSONB, test_set_size, timestamps)
-  - `apps/api/app/models/deployment.py` — `Deployment` (id, config_id, provider, status, endpoint, deployment_info JSONB, timestamps)
-  - `apps/api/app/models/__init__.py`
-- [ ] Generate initial migration: `alembic revision --autogenerate -m "initial_schema"`
-- [ ] Create `scripts/migrate.sh` to run migrations in Docker
-- [ ] Verify `alembic upgrade head` creates all tables without errors
+- [x] Set up Alembic: configured `alembic.ini` + `alembic/env.py` inside `apps/api/`
+- [x] Configure `alembic/env.py` to read `DATABASE_URL` from settings
+- [x] Create SQLAlchemy base models in `apps/api/app/models/`:
+  - [x] `apps/api/app/models/project.py` — `Project` (id, user_id, name, description, timestamps)
+  - [x] `apps/api/app/models/pipeline_config.py` — `PipelineConfig` (id, project_id, name, version, cloud_provider, config JSONB, source, build_id, timestamps)
+  - [x] `apps/api/app/models/build_history.py` — `AutopilotBuild` (id, project_id, status, progress, current_stage, iteration, requirements JSONB, stages JSONB, messages JSONB, result JSONB, error, timestamps)
+  - [x] `apps/api/app/models/evaluation_run.py` — `EvaluationRun` (id, config_id, build_id, metrics JSONB, test_set_size, timestamps)
+  - [x] `apps/api/app/models/deployment.py` — `Deployment` (id, config_id, provider, status, endpoint, deployment_info JSONB, timestamps)
+  - [x] `apps/api/app/models/__init__.py`
+- [x] Handwritten initial migration: `alembic/versions/001_initial_schema.py` (5 tables + indexes + FK constraints)
+- [x] Create `scripts/migrate.sh` to run migrations from project root
+- [x] Added `from_attributes=True` to `RAGBaseModel` to enable ORM → Pydantic conversion
 
 ---
 
