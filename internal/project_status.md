@@ -12,7 +12,7 @@
 | 6 | Phase 1 | P1-1 · JSON Model Catalogs | `feature/p1-json-model-catalogs` | Build shared JSON catalogs for models, providers, strategies, templates, and pricing. | ✅ done |
 | 7 | Phase 1 | P1-2 · TypeScript Shared Types | `feature/p1-typescript-types` | Define shared frontend TypeScript contracts for pipeline and autopilot flows. | ✅ done |
 | 8 | Phase 1 | P1-3 · Python Pydantic Schemas | `feature/p1-python-schemas` | Define backend Pydantic schemas mirroring shared pipeline/domain contracts. | ✅ done |
-| 9 | Phase 1 | P1-4 · Database Schema & Migrations | `feature/p1-database-schema` | Create SQLAlchemy models, Alembic setup, and initial DB migrations. | ⬜ pending |
+| 9 | Phase 1 | P1-4 · Database Schema & Migrations | `feature/p1-database-schema` | Create SQLAlchemy models, Alembic setup, and initial DB migrations. | ✅ done |
 |  | `Phase 2` | `Implement reusable backend RAG services consumed by both Designer and Autopilot modes.` |  |  |  |
 | 10 | Phase 2 | P2-1 · Document Ingestion Service | `feature/p2-ingestion-service` | Implement document loading, preprocessing, and metadata extraction service. | ⬜ pending |
 | 11 | Phase 2 | P2-2 · Chunking Service | `feature/p2-chunking-service` | Implement all chunking strategies and chunk-quality optimization utilities. | ⬜ pending |
