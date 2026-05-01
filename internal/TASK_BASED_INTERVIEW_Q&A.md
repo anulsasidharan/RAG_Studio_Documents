@@ -2827,3 +2827,73 @@ The repo already depends on `langchain-openai`. Mistral’s REST API is OpenAI-c
 
 ---
 
+## P2-7 · Evaluation Engine
+
+### Role and data contract
+
+**Q205: What does the Evaluation Engine consume, and what does it produce?**
+
+It consumes a batch of ``EvaluationExample`` rows: ``question``, ``answer`` (model output), ``contexts`` (list of retrieved strings), and ``ground_truth`` (reference). It returns ``EvaluationEngineResult`` with aggregate ``EvaluationMetrics`` (faithfulness, answer relevance, context precision/recall, average wall-clock latency per query), optional ``FailureAnalysisResult`` from per-row scores, and ``per_row_scores`` for UI drill-down. It does **not** persist runs to Postgres — that remains the responsibility of the future evaluation API router (P4/P8).
+
+---
+
+**Q206: Why use RAGAS instead of hand-written metric code?**
+
+RAGAS implements research-backed LLM-as-judge and embedding-based metrics with consistent scoring semantics, batching, and async execution. Reimplementing faithfulness or context recall would duplicate maintenance and diverge from what Autopilot and industry tooling expect. The engine wraps ``ragas.evaluate`` and maps RAGAS column names (e.g. ``answer_relevancy``) to API schema names (``answer_relevance``).
+
+---
+
+**Q207: How is the HuggingFace ``Dataset`` built, and why pad empty contexts?**
+
+``build_dataset`` aligns columns with RAGAS defaults: ``question``, ``answer``, ``contexts`` (list of strings per row), ``ground_truth``. Empty context lists are replaced with a placeholder string so metrics that assume at least one context do not fail validation or throw during scoring.
+
+---
+
+**Q208: How does `metric_names_from_pipeline` interact with `EvaluationConfigSchema`?**
+
+If evaluation is disabled or the schema is absent, it returns ``None`` and the engine runs the **default** four RAGAS metrics. If enabled with an explicit ``metrics`` list, pipeline names (including ``latency``) are filtered: ``latency`` is measured as wall-clock time around ``ragas.evaluate`` and is not passed to RAGAS. Unknown metric names raise ``ValueError`` at resolve time.
+
+---
+
+**Q209: How does failure analysis work without a second LLM call?**
+
+``analyze_failures`` applies deterministic thresholds to per-row scores (faithfulness, context precision/recall, answer relevancy) and buckets examples into ``hallucination``, ``retrieval_quality``, ``context_gap``, or ``format_error`` (empty answer). It produces counts, up to five example questions per category, and short recommendations. This is a **heuristic** triage layer; deeper root-cause LLM analysis can be added in the Autopilot Evaluation Agent later.
+
+---
+
+**Q210: What does `compare_metrics` optimize for?**
+
+It compares two ``EvaluationMetrics`` instances field-by-field (higher is better for the four RAGAS aggregates; **lower** ``avg_latency_ms`` wins when both sides present latencies). It emits ``MetricDelta`` rows and an overall winner by simple vote count across compared fields — suitable for A/B dashboards, not statistical significance testing.
+
+---
+
+**Q211: What is the purpose of `examples_from_documents` if answers are empty?**
+
+It bootstraps **skeleton** evaluation rows from chunk text (``ground_truth`` excerpt + generic question). Callers must fill ``answer`` and ``contexts`` after running retrieval + generation. It exists for tests and for agents that will wire the full loop; it is not a substitute for LLM-based question generation.
+
+---
+
+**Q212: Why lazy-import RAGAS inside `EvaluationEngine.evaluate`?**
+
+Importing ``ragas.evaluate`` inside the method keeps optional heavy imports off the critical path for unrelated tests and allows unit tests to ``patch("ragas.evaluate", ...)`` without importing the full metric stack at module import time.
+
+---
+
+**Q213: How are OpenAI models for RAGAS configured?**
+
+``Settings.evaluation_llm_model`` and ``evaluation_embedding_model`` default to ``gpt-4o-mini`` and ``text-embedding-3-small``; they use ``OPENAI_API_KEY`` like the rest of the stack. Override via environment (Pydantic field names uppercased with underscores).
+
+---
+
+**Q214: What happens if `result.to_pandas()` fails during failure analysis?**
+
+The engine logs ``failure_analysis_skipped`` and still returns aggregate metrics. Partial degradation avoids losing an entire evaluation run because of a pandas merge or column mismatch after a RAGAS upgrade.
+
+---
+
+**Q215: How would you production-harden this beyond P2-7?**
+
+Add token-budgeted context truncation before building the dataset, persist runs via ``EvaluationRun`` ORM, move long jobs to Celery (P2-8), add idempotency keys for compare endpoints, wire cost estimation into ``cost_per_query``, and optionally run RAGAS with ``in_ci=True`` for more reproducible scores when needed.
+
+---
+

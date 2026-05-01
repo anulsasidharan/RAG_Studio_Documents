@@ -1355,7 +1355,7 @@ sequenceDiagram
     GS-->>R: GenerationResult(text, usage metadata)
 ```
 
-### Design Level 15c — Full RAG core chain (P2-1 … P2-6)
+### Design Level 15c — Full RAG core chain (P2-1 … P2-7)
 
 ```mermaid
 graph LR
@@ -1363,12 +1363,94 @@ graph LR
     CHK6 --> EMB6["EmbeddingService\nP2-3"]
     EMB6 --> VS6["VectorStoreService\nP2-4"]
     VS6 --> RT6["RetrievalService\nP2-5"]
-    RT6 --> GEN6["GenerationService\n✅ P2-6"]
+    RT6 --> GEN6["GenerationService\nP2-6"]
+    GEN6 --> EV6["EvaluationEngine\n✅ P2-7"]
 ```
 
 **Key decisions:**
 - **Provider factory** keeps API keys in ``Settings`` (pydantic-settings) — no secrets in pipeline JSON.
 - **ScoredDoc passthrough** avoids forcing callers to unwrap retrieval results manually.
 - **Streaming** is implemented at the service layer so HTTP routers can adopt SSE without changing prompt logic.
+
+---
+
+## Phase P2-7 · Evaluation Engine
+
+**What changed:** Implemented the seventh core service — **RAGAS-backed batch evaluation** with OpenAI chat + embeddings (configurable via ``Settings``), **metric name resolution** from pipeline configs, **wall-clock latency** averaged per query, **heuristic failure clustering** from per-row scores, **A/B metric comparison** helpers, and **synthetic row stubs** from ``Document`` chunks for bootstrapping test sets. Persistence and HTTP routes remain future work (P4/P8); this layer is the pure scoring engine.
+
+### Design Level 16 — Evaluation package layout
+
+```mermaid
+graph TD
+    subgraph EVAL_PKG["app/core/evaluation/ ✅ P2-7"]
+        INIT["__init__.py\nEvaluationEngine · EvaluationExample\ncompare_metrics · synthetic helpers"]
+
+        subgraph RB["ragas_bridge.py"]
+            RES["resolve_ragas_metric_names\nload_ragas_metrics"]
+            DS["build_dataset → HF Dataset"]
+            MAP["ragas_dict_to_evaluation_metrics\nRAGAS keys → API schema"]
+        end
+
+        subgraph SVC["service.py"]
+            ENG["EvaluationEngine\nevaluate() · evaluate_async()\nlazy ragas.evaluate"]
+        end
+
+        subgraph FA["failure_analysis.py"]
+            AN["analyze_failures()\nthreshold buckets"]
+        end
+
+        subgraph CMP["compare.py"]
+            CM["compare_metrics()\nMetricDelta + winner"]
+        end
+
+        subgraph SYN["synthetic.py"]
+            SY["examples_from_documents()\nstub Q/A rows"]
+        end
+
+        subgraph PB["pipeline_bridge.py"]
+            PN["metric_names_from_pipeline()"]
+        end
+
+        RB --> SVC
+        SVC --> FA
+        CMP --> INIT
+        SYN --> INIT
+        PB --> INIT
+    end
+```
+
+### Design Level 16b — Evaluate sequence (RAGAS + failure pass)
+
+```mermaid
+sequenceDiagram
+    participant Caller as Router / Agent
+    participant Eng as EvaluationEngine
+    participant RAG as ragas.evaluate
+    participant FA as analyze_failures
+
+    Caller->>Eng: evaluate(list EvaluationExample, metric_names?)
+    Eng->>Eng: build_dataset + load_ragas_metrics
+    Eng->>RAG: evaluate(ds, metrics, llm, embeddings)
+    RAG-->>Eng: Result (aggregate + per-row scores)
+    Eng->>Eng: ragas_dict_to_evaluation_metrics + latency
+    Eng->>FA: per_row rows from to_pandas()
+    FA-->>Eng: FailureAnalysisResult
+    Eng-->>Caller: EvaluationEngineResult
+```
+
+### Design Level 16c — Post-generation quality loop
+
+```mermaid
+graph LR
+    GEN7["GenerationService\nP2-6"] --> EV7["EvaluationEngine\n✅ P2-7"]
+    EV7 --> MET["RAGAS metrics\nfaithfulness · relevancy\nprecision · recall"]
+    EV7 --> FAIL["Failure buckets\nheuristic triage"]
+    EV7 --> AB["compare_metrics\nA/B deltas"]
+```
+
+**Key decisions:**
+- **Secrets in Settings only** — evaluation uses the same ``OPENAI_API_KEY`` pattern as embeddings/generation for RAGAS defaults.
+- **Lazy RAGAS import** — keeps test collection light and enables ``patch("ragas.evaluate")``.
+- **Explicit ``pandas`` / ``datasets``** in ``requirements.txt** so ``Result.to_pandas()`` and HF ``Dataset`` construction are reproducible in CI.
 
 ---

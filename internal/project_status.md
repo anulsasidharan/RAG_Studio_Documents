@@ -20,7 +20,7 @@
 | 13 | Phase 2 | P2-4 · Vector Store Service | `feature/p2-vectorstore-service` | Implement vector store clients/factory and indexing/search operations. | ✅ done |
 | 14 | Phase 2 | P2-5 · Retrieval Service | `feature/p2-retrieval-service` | Implement retrieval strategies, hybrid search, and reranking workflows. | ✅ done |
 | 15 | Phase 2 | P2-6 · Generation Service | `feature/p2-generation-service` | Implement multi-provider LLM generation and RAG chain orchestration. | ✅ done |
-| 16 | Phase 2 | P2-7 · Evaluation Engine | `feature/p2-evaluation-engine` | Implement RAG evaluation metrics, test-set generation, and failure analysis. | ⬜ pending |
+| 16 | Phase 2 | P2-7 · Evaluation Engine | `feature/p2-evaluation-engine` | Implement RAG evaluation metrics, test-set generation, and failure analysis. | ✅ done |
 | 17 | Phase 2 | P2-8 · Celery Worker & Task Queue | `feature/p2-celery-worker` | Add async task processing for build, evaluation, and deployment jobs. | ⬜ pending |
 | 18 | Phase 2 | P2-9 · Health & Utility Endpoints | `feature/p2-health-endpoints` | Add health checks, logging, validators, helpers, and cost utility wiring. | ⬜ pending |
 |  | `Phase 3` | `Build the frontend foundation: UI system, app shell, state stores, and landing experience.` |  |  |  |
