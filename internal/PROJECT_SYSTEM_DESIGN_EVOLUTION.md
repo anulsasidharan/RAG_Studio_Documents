@@ -1012,10 +1012,10 @@ graph TB
     end
 
     DOCS["Documents\n(list[Document])"] --> ING_SVC2
-    ING_SVC2 -->|list[Document]| CHUNK_SVC
+    ING_SVC2 -->|"list[Document]"| CHUNK_SVC
     CHUNK_SVC --> CHUNK_FAC --> EIGHT_STRAT
-    EIGHT_STRAT -->|list[Chunk]| QUALITY_SVC
-    QUALITY_SVC -->|filtered list[Chunk]| EMBEDDING_BOX
+    EIGHT_STRAT -->|"list[Chunk]"| QUALITY_SVC
+    QUALITY_SVC -->|"filtered list[Chunk]"| EMBEDDING_BOX
     EMBEDDING_BOX --> VECTORSTORE_BOX --> RETRIEVAL_BOX --> GENERATION_BOX
     AGENTS --> CHUNK_SVC
     AGENTS --> QUALITY_SVC
@@ -1109,40 +1109,40 @@ sequenceDiagram
 graph TB
     subgraph API["FastAPI Backend (apps/api)"]
         subgraph CORE["app/core/ (P2-x services)"]
-            subgraph INGESTION_BOX3["app/core/ingestion/ ✅ P2-1"]
-                ING_SVC3["IngestionService\nload() → list[Document]"]
+            subgraph INGESTION_BOX3["app/core/ingestion/ P2-1"]
+                ING_SVC3["IngestionService\nload() -> list Document"]
             end
 
-            subgraph CHUNKING_BOX3["app/core/chunking/ ✅ P2-2"]
+            subgraph CHUNKING_BOX3["app/core/chunking/ P2-2"]
                 CHUNK_SVC3["ChunkingService\nchunk() / chunk_many()"]
                 QUALITY_SVC3["ChunkQualityScorer\nfilter_low_quality()"]
             end
 
-            subgraph EMBEDDING_BOX3["app/core/embedding/ ✅ P2-3"]
+            subgraph EMBEDDING_BOX3["app/core/embedding/ P2-3"]
                 EMB_SVC["EmbeddingService\nembed() / embed_query()\nembed_many()"]
                 EMB_FAC["EmbedderFactory\nfrom_provider()"]
-                FIVE_PROV["5 Embedders\nopenai · cohere · google\nhuggingface · nomic"]
+                FIVE_PROV["5 Embedders\nopenai cohere google\nhuggingface nomic"]
                 BENCH_SVC["EmbeddingBenchmarker\nbenchmark()"]
-                CACHE_SVC["EmbeddingCache\nRedis + in-memory fallback"]
+                CACHE_SVC["EmbeddingCache\nRedis + memory fallback"]
             end
 
-            VECTORSTORE_BOX3["app/core/vectorstore/\n⬜ P2-4 next"]
-            RETRIEVAL_BOX3["app/core/retrieval/\n⬜ P2-5"]
-            GENERATION_BOX3["app/core/generation/\n⬜ P2-6"]
+            VECTORSTORE_BOX3["app/core/vectorstore/ P2-4 next"]
+            RETRIEVAL_BOX3["app/core/retrieval/ P2-5"]
+            GENERATION_BOX3["app/core/generation/ P2-6"]
         end
 
-        AGENTS3["app/agents/\nEmbedding Tester Agent\nuses EmbeddingBenchmarker\nto rank providers"]
-        ROUTERS3["app/routers/\nDesigner endpoints\ncall EmbeddingService"]
-        REDIS3["Redis\nEmbeddingCache backend"]
+        AGENTS3["app/agents\nEmbedding Tester Agent"]
+        ROUTERS3["app/routers\nDesigner endpoints"]
+        REDIS3["Redis Cache"]
     end
 
-    DOCS3["Documents\n(list[Document])"] --> ING_SVC3
-    ING_SVC3 -->|list[Document]| CHUNK_SVC3
-    CHUNK_SVC3 -->|list[Chunk]| QUALITY_SVC3
-    QUALITY_SVC3 -->|filtered list[Chunk]| EMB_SVC
+    DOCS3["Documents"] --> ING_SVC3
+    ING_SVC3 -->|list Document| CHUNK_SVC3
+    CHUNK_SVC3 -->|list Chunk| QUALITY_SVC3
+    QUALITY_SVC3 -->|filtered chunks| EMB_SVC
     EMB_SVC --> EMB_FAC --> FIVE_PROV
     EMB_SVC <--> CACHE_SVC <--> REDIS3
-    FIVE_PROV -->|list[tuple[Document, Embedding]]| VECTORSTORE_BOX3
+    FIVE_PROV -->|document embedding pairs| VECTORSTORE_BOX3
     VECTORSTORE_BOX3 --> RETRIEVAL_BOX3 --> GENERATION_BOX3
     AGENTS3 --> BENCH_SVC
     BENCH_SVC --> FIVE_PROV
