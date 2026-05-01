@@ -2757,3 +2757,73 @@ Ignoring a directory wholesale (`docs/internal/`) prevents git from tracking *an
 
 ---
 
+## P2-6 · Generation Service
+
+### Role in the pipeline
+
+**Q194: What does `GenerationService` add that calling a raw LLM API does not?**
+
+It standardises **RAG prompt assembly** (numbered context blocks, optional source lines from metadata, default faithfulness-oriented system prompt), accepts **`Document` or `ScoredDoc`** so retrieval output plugs in without manual unwrapping, maps **`GenerationConfigSchema` → `GenerationRuntimeConfig`** for parity with P1-3, and returns a **`GenerationResult`** with normalised text plus `finish_reason` / token usage when the chat model exposes them. Routers and agents get one orchestration surface instead of duplicating provider-specific message formats.
+
+---
+
+**Q195: How does multi-provider support work without exploding `if/elif` in the service?**
+
+`create_chat_model` in `factory.py` centralises provider wiring: LangChain `ChatOpenAI`, `ChatAnthropic`, `ChatGoogleGenerativeAI`, `ChatCohere` (langchain-community), Mistral via **OpenAI-compatible** client + fixed Mistral base URL, and **meta/custom** via configurable OpenAI-compatible base URL + API key (Together, vLLM, local Llama). `GenerationService` only calls `ainvoke` / `astream` on the returned `BaseChatModel`, so new providers are factory changes, not service rewrites.
+
+---
+
+**Q196: Why are API keys read from `Settings` instead of the pipeline JSON?**
+
+Pipeline configurations are stored and exported (Designer, templates) — they must stay **secret-free**. Credentials belong in environment-backed `Settings` (`OPENAI_API_KEY`, `MISTRAL_API_KEY`, `OPENAI_COMPATIBLE_*`, etc.) so the same saved pipeline can run in dev, staging, and production with different keys.
+
+---
+
+**Q197: How is JSON output mode implemented across providers?**
+
+For **OpenAI**, `output_format == "json"` sets `model_kwargs={"response_format": {"type": "json_object"}}` on `ChatOpenAI` where the model supports it. For **Anthropic, Google, Cohere**, there is no single portable JSON mode in the factory; `build_rag_user_message` appends an instruction to emit **valid JSON only** (no fences). That keeps behaviour consistent enough for evaluation and UI while remaining honest about provider capabilities.
+
+---
+
+**Q198: What is the difference between `generate()` and `stream()`?**
+
+`generate()` awaits a full `AIMessage` and returns `GenerationResult`. `stream()` wraps the model’s `astream` and yields text chunks for future **SSE** endpoints or progressive UI rendering, using the same prompts and context assembly.
+
+---
+
+**Q199: How does the service handle `ScoredDoc` from retrieval?**
+
+`_normalize_context` detects `ScoredDoc` instances and uses `.document` only; similarity scores are intentionally **not** injected into the LLM prompt by default (they are not calibrated across providers). If product requirements change, a later iteration could add optional score-prefixed lines in `format_context_block`.
+
+---
+
+**Q200: Why does Google use `max_output_tokens` while OpenAI uses `max_tokens`?**
+
+LangChain’s `ChatGoogleGenerativeAI` follows the Gemini API naming (`max_output_tokens`). The factory maps `GenerationRuntimeConfig.max_tokens` to that parameter explicitly instead of reusing the shared `_common_kwargs` helper used for OpenAI/Mistral.
+
+---
+
+**Q201: How would you unit-test generation without calling real LLMs?**
+
+Patch `create_chat_model` to return an `AsyncMock` whose `ainvoke` returns a fixed `AIMessage`. The tests in `tests/test_core/test_generation.py` follow this pattern and assert prompt assembly / bridge logic separately from network I/O.
+
+---
+
+**Q202: Where does `generation_runtime_from_pipeline` sit in the architecture?**
+
+Same role as `retrieval_runtime_from_pipeline`: at the **router boundary**, validate with Pydantic (`GenerationConfigSchema`), then convert enums and optional fields to plain strings and dataclasses the core layer can import without tight coupling to FastAPI or JSON schema evolution.
+
+---
+
+**Q203: What operational risk remains after P2-6 for production chat?**
+
+**Context length**: retrieved chunks are concatenated without a tokenizer-based budget; long corpora can exceed model context. Mitigations (truncate by score, summarise, or map-reduce) belong in a later phase or router policy. **Streaming back-pressure** and **rate limits** are not handled inside the service — they belong in middleware or API gateways.
+
+---
+
+**Q204: Why expose Mistral via OpenAI-compatible `ChatOpenAI` instead of a dedicated SDK?**
+
+The repo already depends on `langchain-openai`. Mistral’s REST API is OpenAI-compatible for chat completions; a dedicated package adds install surface without changing the `BaseChatModel` contract. If Mistral-specific features are required later, swapping the factory branch is localized.
+
+---
+

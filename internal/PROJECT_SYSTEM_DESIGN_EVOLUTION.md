@@ -891,8 +891,8 @@ graph TB
             CHUNKING["app/core/chunking/\n✅ P2-2"]
             EMBEDDING["app/core/embedding/\n✅ P2-3"]
             VECTORSTORE["app/core/vectorstore/\n✅ P2-4"]
-            RETRIEVAL["app/core/retrieval/\n⬜ P2-5"]
-            GENERATION["app/core/generation/\n⬜ P2-6"]
+            RETRIEVAL["app/core/retrieval/\n✅ P2-5"]
+            GENERATION["app/core/generation/\n✅ P2-6"]
         end
 
         ROUTERS["app/routers/\n(will call IngestionService\nvia Designer/Autopilot endpoints)"]
@@ -1005,7 +1005,7 @@ graph TB
             EMBEDDING_BOX["app/core/embedding/\n✅ P2-3"]
             VECTORSTORE_BOX["app/core/vectorstore/\n✅ P2-4"]
             RETRIEVAL_BOX["app/core/retrieval/\n✅ P2-5"]
-            GENERATION_BOX["app/core/generation/\n⬜ P2-6"]
+            GENERATION_BOX["app/core/generation/\n✅ P2-6"]
         end
 
         AGENTS["app/agents/\nAutopilot uses ChunkingService\n+ ChunkQualityScorer\nfor optimization loop"]
@@ -1129,7 +1129,7 @@ graph TB
 
             VECTORSTORE_BOX3["app/core/vectorstore/ P2-4"]
             RETRIEVAL_BOX3["app/core/retrieval/ ✅ P2-5"]
-            GENERATION_BOX3["app/core/generation/ P2-6"]
+            GENERATION_BOX3["app/core/generation/\n✅ P2-6"]
         end
 
         AGENTS3["app/agents\nEmbedding Tester Agent"]
@@ -1213,7 +1213,7 @@ graph LR
     CHK --> EMB["EmbeddingService\nP2-3"]
     EMB --> VS["VectorStoreService\nP2-4"]
     VS --> RTV["RetrievalService\n✅ P2-5"]
-    RTV --> GEN["GenerationService\nP2-6 next"]
+    RTV --> GEN["GenerationService\n✅ P2-6"]
 ```
 
 ---
@@ -1294,7 +1294,81 @@ graph LR
     CHK --> EMB["EmbeddingService\nP2-3"]
     EMB --> VS["VectorStoreService\nP2-4"]
     VS --> RTV["RetrievalService\n✅ P2-5"]
-    RTV --> GEN["GenerationService\nP2-6 next"]
+    RTV --> GEN["GenerationService\n✅ P2-6"]
 ```
+
+---
+
+## Phase P2-6 · Generation Service
+
+**What changed:** Implemented the sixth core service — multi-provider LLM generation with RAG-style context assembly. ``GenerationService`` accepts a user query plus ``list[Document]`` or ``list[ScoredDoc]`` (from ``RetrievalService``), builds a numbered context block with optional source hints, and invokes a LangChain ``BaseChatModel`` selected by ``GenerationRuntimeConfig.provider``. ``create_chat_model`` wires OpenAI, Anthropic, Google Gemini, Cohere (via langchain-community), Mistral (OpenAI-compatible endpoint), and OpenAI-compatible endpoints for **meta** / **custom** (Together, vLLM, local Llama) using dedicated settings keys. JSON output mode uses OpenAI native ``response_format``; other providers rely on prompt suffixes from ``output_format``. Optional ``stream()`` exposes ``astream`` for future SSE endpoints. ``generation_runtime_from_pipeline`` maps ``GenerationConfigSchema`` to runtime dataclasses at router boundaries.
+
+### Design Level 15 — Generation package layout
+
+```mermaid
+graph TD
+    subgraph GEN_PKG["app/core/generation/ ✅ P2-6"]
+        INIT["__init__.py\nGenerationService\nGenerationResult · GenerationRuntimeConfig\ngeneration_runtime_from_pipeline"]
+
+        subgraph PROMPTS["prompts.py"]
+            DEF_SYS["DEFAULT_RAG_SYSTEM_PROMPT"]
+            FMT["format_context_block()\nnumbered [n] + source"]
+            USER["build_rag_user_message()\nJSON / Markdown hints"]
+        end
+
+        subgraph FACT["factory.py"]
+            CM["create_chat_model()\nOpenAI · Anthropic · Google\nCohere · Mistral\nOpenAI-compatible"]
+        end
+
+        subgraph BR["pipeline_bridge.py"]
+            MAP["generation_runtime_from_pipeline\nPydantic → dataclass"]
+        end
+
+        subgraph SVC["service.py"]
+            GS["GenerationService\ngenerate() · stream()\n_normalize_context ScoredDoc|Document"]
+        end
+
+        PROMPTS --> SVC
+        FACT --> SVC
+        MAP --> INIT
+        SVC --> INIT
+    end
+```
+
+### Design Level 15b — RAG answer sequence (post-retrieval)
+
+```mermaid
+sequenceDiagram
+    participant R as Router / Agent
+    participant RS as RetrievalService
+    participant GS as GenerationService
+    participant LLM as Chat model
+
+    R->>RS: retrieve(query, query_vec, ...)
+    RS-->>R: list ScoredDoc
+
+    R->>GS: generate(query, scored_docs, GenerationRuntimeConfig)
+    GS->>GS: normalize ScoredDoc → Document
+    GS->>GS: build_rag_user_message + system prompt
+    GS->>LLM: ainvoke([System, Human])
+    LLM-->>GS: AIMessage
+    GS-->>R: GenerationResult(text, usage metadata)
+```
+
+### Design Level 15c — Full RAG core chain (P2-1 … P2-6)
+
+```mermaid
+graph LR
+    ING6["IngestionService\nP2-1"] --> CHK6["ChunkingService\nP2-2"]
+    CHK6 --> EMB6["EmbeddingService\nP2-3"]
+    EMB6 --> VS6["VectorStoreService\nP2-4"]
+    VS6 --> RT6["RetrievalService\nP2-5"]
+    RT6 --> GEN6["GenerationService\n✅ P2-6"]
+```
+
+**Key decisions:**
+- **Provider factory** keeps API keys in ``Settings`` (pydantic-settings) — no secrets in pipeline JSON.
+- **ScoredDoc passthrough** avoids forcing callers to unwrap retrieval results manually.
+- **Streaming** is implemented at the service layer so HTTP routers can adopt SSE without changing prompt logic.
 
 ---
