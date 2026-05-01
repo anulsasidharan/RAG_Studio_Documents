@@ -641,6 +641,9 @@ graph LR
 | P1-2 | TypeScript type system | `apps/web/src/types/` — 4 type files + barrel export; all catalog shapes typed |
 | P1-3 | Python schema layer | `apps/api/app/schemas/` — 6 files, ~60 Pydantic v2 schemas; camelCase aliases; StrEnum types |
 | P1-4 | Database + migrations | `apps/api/app/models/` — 5 ORM models; `alembic/` — initial migration, 5 tables, indexes, FK constraints |
+| P2-1 | Document ingestion core | `apps/api/app/core/ingestion/` — loaders, preprocessors, extractors, `IngestionService` |
+| P2-2 | Chunking core | `apps/api/app/core/chunking/` — 8 strategies, `ChunkerFactory`, `ChunkQualityScorer`, `ChunkingService` |
+| P2-3 | Embedding core | `apps/api/app/core/embedding/` — 5 providers, `EmbeddingCache`, `EmbeddingBenchmarker`, `EmbeddingService` |
 
 ---
 
@@ -782,4 +785,366 @@ graph TB
     V001 --> PG
     PG --> AM
     SCRIPTS[scripts/migrate.sh] --> ENV
+```
+
+---
+
+## Phase P2-1 · Document Ingestion Service
+
+**What changed:** Implemented the first core service layer module — a format-agnostic document ingestion pipeline. The backend can now load text from PDFs, DOCX, TXT, Markdown, HTML, CSV, JSON files, and remote URLs, clean the text, extract rich metadata, and return a unified list of LangChain `Document` objects ready for the downstream chunking service.
+
+### Design Level 10 — Document Ingestion Pipeline
+
+```mermaid
+flowchart TD
+    subgraph INPUT["Input Sources"]
+        FILE["File path\n.pdf / .docx / .txt / .md\n.html / .csv / .json"]
+        BYTES["Raw bytes\n(uploaded file)"]
+        URL["Remote URL\nhttps://..."]
+    end
+
+    subgraph INGESTION_SERVICE["IngestionService  (app/core/ingestion/__init__.py)"]
+        IS_LOAD["load(source, config)"]
+        IS_LOADRAW["_load_raw(source)"]
+        IS_META["_extract_metadata(source, doc)"]
+        IS_FILTER["filter empty docs"]
+    end
+
+    subgraph LOADER_FACTORY["LoaderFactory  (loaders.py)"]
+        LF_EXT["from_extension(ext)"]
+        LF_PATH["from_path(path)"]
+        LF_URL["for_url()"]
+    end
+
+    subgraph LOADERS["Concrete Loaders  (loaders.py)"]
+        PDF_L["PDFLoader\npypdf → 1 doc/page"]
+        DOCX_L["DOCXLoader\npython-docx → 1 doc"]
+        TXT_L["TextLoader\nplain text / Markdown"]
+        HTML_L["HTMLLoader\nBeautifulSoup tag strip"]
+        CSV_L["CSVLoader\n1 doc/row as key:val"]
+        JSON_L["JSONLoader\nlist→1 doc/item\nobj→1 doc"]
+        URL_L["URLLoader\ntrafilatura body extract"]
+    end
+
+    subgraph PREPROCESSORS["TextPreprocessor  (preprocessors.py)"]
+        FE["fix_encoding()\n• NFC normalise\n• strip null bytes"]
+        SH["strip_html_tags()\n(optional)"]
+        RHF["remove_headers_footers()\n(optional, form-feed pages)"]
+        NW["normalize_whitespace()\n• collapse spaces/tabs\n• cap newline runs"]
+    end
+
+    subgraph EXTRACTORS["Metadata Extractors  (extractors.py)"]
+        EPDF["extract_pdf_metadata()\ntitle · author · page_count"]
+        EDOCX["extract_docx_metadata()\ncore_properties"]
+        EHTML["extract_html_metadata()\n<title> · meta tags · og:*"]
+        EURL["extract_url_metadata()\nsource_url + html meta"]
+        EFILE["extract_file_metadata()\nfilename · extension · size"]
+        ESEC["extract_section_headers()\n# ATX + title-case heuristic"]
+    end
+
+    subgraph OUTPUT["Output"]
+        DOCS["list[Document]\npage_content: cleaned text\nmetadata: source · file_type\npage_number · title · author\nsection_headers · custom_metadata"]
+    end
+
+    FILE --> IS_LOAD
+    BYTES --> IS_LOAD
+    URL --> IS_LOAD
+
+    IS_LOAD --> IS_LOADRAW
+    IS_LOADRAW --> LF_EXT
+    IS_LOADRAW --> LF_PATH
+    IS_LOADRAW --> LF_URL
+
+    LF_EXT & LF_PATH --> PDF_L & DOCX_L & TXT_L & HTML_L & CSV_L & JSON_L
+    LF_URL --> URL_L
+
+    PDF_L & DOCX_L & TXT_L & HTML_L & CSV_L & JSON_L & URL_L --> IS_LOAD
+
+    IS_LOAD --> FE --> SH --> RHF --> NW
+    NW --> IS_FILTER
+    IS_FILTER --> IS_META
+
+    IS_META --> EPDF
+    IS_META --> EDOCX
+    IS_META --> EHTML
+    IS_META --> EURL
+    IS_META --> EFILE
+    IS_META --> ESEC
+
+    EPDF & EDOCX & EHTML & EURL & EFILE & ESEC --> OUTPUT
+    IS_FILTER --> OUTPUT
+```
+
+### Design Level 10b — Ingestion Service in Full Stack Context
+
+```mermaid
+graph TB
+    subgraph API["FastAPI Backend (apps/api)"]
+        subgraph CORE["app/core/ (P2-x services — being built)"]
+            subgraph INGESTION["app/core/ingestion/ ✅ P2-1"]
+                ING_SVC["IngestionService\nload() / load_many()"]
+                LOADERS_M["loaders.py\n7 format loaders"]
+                PREPRO_M["preprocessors.py\nTextPreprocessor"]
+                EXTRAC_M["extractors.py\n6 metadata extractors"]
+            end
+            CHUNKING["app/core/chunking/\n✅ P2-2"]
+            EMBEDDING["app/core/embedding/\n✅ P2-3"]
+            VECTORSTORE["app/core/vectorstore/\n⬜ P2-4"]
+            RETRIEVAL["app/core/retrieval/\n⬜ P2-5"]
+            GENERATION["app/core/generation/\n⬜ P2-6"]
+        end
+
+        ROUTERS["app/routers/\n(will call IngestionService\nvia Designer/Autopilot endpoints)"]
+        MODELS_M["app/models/ ✅ P1-4"]
+        SCHEMAS_M["app/schemas/ ✅ P1-3"]
+    end
+
+    DOCS_IN["Documents\n(files / URLs / bytes)"] --> ING_SVC
+    ING_SVC --> LOADERS_M --> PREPRO_M --> EXTRAC_M
+    ING_SVC --> CHUNKING
+    CHUNKING --> EMBEDDING
+    EMBEDDING --> VECTORSTORE
+    VECTORSTORE --> RETRIEVAL
+    RETRIEVAL --> GENERATION
+    ROUTERS --> ING_SVC
+    SCHEMAS_M -.->|IngestionConfig| ING_SVC
+```
+
+---
+
+## Phase P2-2 · Chunking Service
+
+**What changed:** Implemented the second core service — the Chunking layer. The service accepts `list[Document]` from the Ingestion Service and returns `list[Chunk]` (a `Document` type alias with enriched metadata). Eight chunking strategies are available, each isolated in its own module. A `ChunkerFactory` dispatches to the correct implementation via a strategy-name map. `ChunkQualityScorer` enables Autopilot agents to filter low-quality chunks before embedding.
+
+### Design Level 11 — Chunking Service Architecture
+
+```mermaid
+graph TD
+    subgraph CHUNKING_PKG["app/core/chunking/ ✅ P2-2"]
+        INIT["__init__.py\nChunkingService · ChunkerFactory\n_STRATEGY_MAP\n8 strategies registered"]
+
+        subgraph BASE["strategies.py (base layer)"]
+            CHUNK_ALIAS["Chunk = Document\n(type alias)"]
+            CFG["ChunkingConfig\n(dataclass)\n12 config fields"]
+            ABC_CLS["TextChunker (ABC)\nchunk() abstract\n_make_chunk() helper"]
+        end
+
+        subgraph STRATEGIES["Concrete Chunkers"]
+            FX["fixed_size.py\nFixedSizeChunker\nPure character sliding window\nZero external deps"]
+            RC["recursive.py\nRecursiveCharacterChunker\nLangChain RCTS\nLazy import"]
+            SEM["semantic.py\nSemanticChunker\nsentence-transformers\nCosine similarity\nPer-instance model cache"]
+            DOC["document_based.py\nMarkdownHeaderChunker\nHTMLSectionChunker\nBeautifulSoup DOM walk"]
+            CODE["code_aware.py\nCodeAwareChunker\nLanguage enum dispatch\n12 extension mappings"]
+            SENT["sentence.py\nSentenceChunker\nParagraphChunker\nRegex boundary detection"]
+        end
+
+        subgraph QUALITY["optimizers.py (quality layer)"]
+            METRICS["ChunkQualityMetrics\ncontent_density\ncompleteness\nsize_score\noverall"]
+            SCORER["ChunkQualityScorer\nweighted scoring\nfilter_low_quality()\nscore_batch()"]
+        end
+    end
+
+    ABC_CLS --> FX & RC & SEM & DOC & CODE & SENT
+    CFG --> ABC_CLS
+    CHUNK_ALIAS --> ABC_CLS
+    FX & RC & SEM & DOC & CODE & SENT --> INIT
+    METRICS --> SCORER
+```
+
+### Design Level 11b — Chunking Data Flow
+
+```mermaid
+sequenceDiagram
+    participant CALLER as Caller<br/>(Agent or Router)
+    participant SVC as ChunkingService
+    participant FAC as ChunkerFactory
+    participant STRAT as ConcreteChunker
+    participant ABC as TextChunker._make_chunk
+    participant SCORER as ChunkQualityScorer
+
+    CALLER->>SVC: chunk(docs, ChunkingConfig(strategy="semantic"))
+    SVC->>FAC: from_strategy("semantic")
+    FAC-->>SVC: SemanticChunker()
+    SVC->>STRAT: chunker.chunk(docs, config)
+    loop For each Document
+        STRAT->>STRAT: split text into raw pieces
+        loop For each raw piece
+            STRAT->>ABC: _make_chunk(text, parent_meta, i, total, "semantic")
+            ABC-->>STRAT: Chunk (Document + enriched metadata)
+        end
+    end
+    STRAT-->>SVC: list[Chunk]
+    SVC-->>CALLER: list[Chunk]
+
+    Note over CALLER,SCORER: Optional quality filtering step
+    CALLER->>SCORER: filter_low_quality(chunks, min_score=0.5)
+    loop For each Chunk
+        SCORER->>SCORER: score(chunk) → ChunkQualityMetrics
+    end
+    SCORER-->>CALLER: filtered list[Chunk]
+```
+
+### Design Level 11c — Chunking Service in Full Stack Context
+
+```mermaid
+graph TB
+    subgraph API["FastAPI Backend (apps/api)"]
+        subgraph CORE["app/core/ (P2-x services)"]
+            subgraph INGESTION_BOX["app/core/ingestion/ ✅ P2-1"]
+                ING_SVC2["IngestionService\nload() → list[Document]"]
+            end
+
+            subgraph CHUNKING_BOX["app/core/chunking/ ✅ P2-2"]
+                CHUNK_SVC["ChunkingService\nchunk() / chunk_many()"]
+                CHUNK_FAC["ChunkerFactory\nfrom_strategy()"]
+                EIGHT_STRAT["8 Chunkers\nfixed-size · recursive · semantic\nmarkdown · html · sentence\nparagraph · code-aware"]
+                QUALITY_SVC["ChunkQualityScorer\nfilter_low_quality()"]
+            end
+
+            EMBEDDING_BOX["app/core/embedding/\n✅ P2-3"]
+            VECTORSTORE_BOX["app/core/vectorstore/\n⬜ P2-4 next"]
+            RETRIEVAL_BOX["app/core/retrieval/\n⬜ P2-5"]
+            GENERATION_BOX["app/core/generation/\n⬜ P2-6"]
+        end
+
+        AGENTS["app/agents/\nAutopilot uses ChunkingService\n+ ChunkQualityScorer\nfor optimization loop"]
+        ROUTERS2["app/routers/\nDesigner endpoints\ncall ChunkingService"]
+    end
+
+    DOCS["Documents\n(list[Document])"] --> ING_SVC2
+    ING_SVC2 -->|list[Document]| CHUNK_SVC
+    CHUNK_SVC --> CHUNK_FAC --> EIGHT_STRAT
+    EIGHT_STRAT -->|list[Chunk]| QUALITY_SVC
+    QUALITY_SVC -->|filtered list[Chunk]| EMBEDDING_BOX
+    EMBEDDING_BOX --> VECTORSTORE_BOX --> RETRIEVAL_BOX --> GENERATION_BOX
+    AGENTS --> CHUNK_SVC
+    AGENTS --> QUALITY_SVC
+    ROUTERS2 --> CHUNK_SVC
+```
+
+---
+
+## Phase P2-3 · Embedding Service
+
+**What changed:** Implemented the third core service — the Embedding layer. The service accepts `list[Document]` (output of ChunkingService) and returns `list[tuple[Document, Embedding]]` — each chunk paired with its float vector, ready for upsert into the vector store. Five provider wrappers cover every model in the catalog (OpenAI, Cohere, Google, HuggingFace, Nomic). An `EmbeddingBenchmarker` lets Autopilot agents compare providers on throughput. An `EmbeddingCache` backed by Redis (with in-process dict fallback) eliminates redundant API calls for duplicate texts.
+
+### Design Level 12 — Embedding Service Architecture
+
+```mermaid
+graph TD
+    subgraph EMBEDDING_PKG["app/core/embedding/ ✅ P2-3"]
+        INIT["__init__.py\nEmbeddingService · EmbedderFactory\n_PROVIDER_MAP\n5 providers registered"]
+
+        subgraph BASE["strategies.py (base layer)"]
+            EMB_ALIAS["Embedding = list[float]\n(type alias)"]
+            CFG["EmbeddingConfig\n(dataclass)\nmodel · provider · dimensions\nbatch_size · max_tokens"]
+            ABC_CLS["TextEmbedder (ABC)\nembed_documents() abstract\nembed_query() abstract"]
+        end
+
+        subgraph PROVIDERS["Concrete Embedders"]
+            OAI["openai.py\nOpenAIEmbedder\nlangchain-openai\nMatryoshka dimensions support\nBatch: 100 texts"]
+            COH["cohere.py\nCohereEmbedder\nlangchain-community\nCatalog ID → API name map\nBatch: 96 texts (API limit)"]
+            GOO["google.py\nGoogleEmbedder\nlangchain-google-genai\ntext-embedding-004 (Gecko)\nBatch: 100 texts"]
+            HF["huggingface.py\nHuggingFaceEmbedder\nsentence-transformers\nPer-instance model cache\nL2-normalised · Batch: 32"]
+            NOM["nomic.py\nNomicEmbedder\nsentence-transformers\ntrust_remote_code=True\nSingleton model cache · 8K ctx"]
+        end
+
+        subgraph UTILITIES["Support Modules"]
+            BENCH["benchmarker.py\nBenchmarkResult (dataclass)\nEmbeddingBenchmarker\nbenchmark() → sorted by\ntexts_per_second"]
+            CACHE["cache.py\nEmbeddingCache\nSHA-256 key derivation\nRedis (binary pack 4B/float)\nIn-memory dict fallback\nembed_with_cache()"]
+        end
+    end
+
+    ABC_CLS --> OAI & COH & GOO & HF & NOM
+    CFG --> ABC_CLS
+    EMB_ALIAS --> ABC_CLS
+    OAI & COH & GOO & HF & NOM --> INIT
+    BENCH --> INIT
+    CACHE --> INIT
+```
+
+### Design Level 12b — Embedding Data Flow
+
+```mermaid
+sequenceDiagram
+    participant CALLER as Caller<br/>(Agent or Router)
+    participant SVC as EmbeddingService
+    participant CACHE as EmbeddingCache
+    participant FAC as EmbedderFactory
+    participant PROV as ConcreteEmbedder
+    participant REDIS as Redis
+
+    CALLER->>SVC: embed(chunks, EmbeddingConfig(provider="openai"))
+    SVC->>FAC: from_provider("openai")
+    FAC-->>SVC: OpenAIEmbedder()
+    SVC->>SVC: extract page_content from each chunk
+
+    alt Cache enabled
+        SVC->>CACHE: embed_with_cache(embedder, texts, config)
+        loop For each text
+            CACHE->>REDIS: GET emb:<sha256>
+            REDIS-->>CACHE: hit → packed bytes OR miss → nil
+        end
+        Note over CACHE: Collect miss_texts
+        CACHE->>PROV: embed_documents(miss_texts, config)
+        PROV-->>CACHE: list[Embedding]
+        loop For each miss
+            CACHE->>REDIS: SETEX emb:<sha256> TTL packed_bytes
+        end
+        CACHE-->>SVC: list[Embedding] (hits + fresh)
+    else No cache
+        SVC->>PROV: embed_documents(texts, config)
+        PROV-->>SVC: list[Embedding]
+    end
+
+    loop For each (chunk, vector)
+        SVC->>SVC: enrich metadata with embedding_model,\nembedding_provider, embedding_dimensions
+    end
+    SVC-->>CALLER: list[tuple[Document, Embedding]]
+```
+
+### Design Level 12c — Embedding Service in Full Stack Context
+
+```mermaid
+graph TB
+    subgraph API["FastAPI Backend (apps/api)"]
+        subgraph CORE["app/core/ (P2-x services)"]
+            subgraph INGESTION_BOX3["app/core/ingestion/ ✅ P2-1"]
+                ING_SVC3["IngestionService\nload() → list[Document]"]
+            end
+
+            subgraph CHUNKING_BOX3["app/core/chunking/ ✅ P2-2"]
+                CHUNK_SVC3["ChunkingService\nchunk() / chunk_many()"]
+                QUALITY_SVC3["ChunkQualityScorer\nfilter_low_quality()"]
+            end
+
+            subgraph EMBEDDING_BOX3["app/core/embedding/ ✅ P2-3"]
+                EMB_SVC["EmbeddingService\nembed() / embed_query()\nembed_many()"]
+                EMB_FAC["EmbedderFactory\nfrom_provider()"]
+                FIVE_PROV["5 Embedders\nopenai · cohere · google\nhuggingface · nomic"]
+                BENCH_SVC["EmbeddingBenchmarker\nbenchmark()"]
+                CACHE_SVC["EmbeddingCache\nRedis + in-memory fallback"]
+            end
+
+            VECTORSTORE_BOX3["app/core/vectorstore/\n⬜ P2-4 next"]
+            RETRIEVAL_BOX3["app/core/retrieval/\n⬜ P2-5"]
+            GENERATION_BOX3["app/core/generation/\n⬜ P2-6"]
+        end
+
+        AGENTS3["app/agents/\nEmbedding Tester Agent\nuses EmbeddingBenchmarker\nto rank providers"]
+        ROUTERS3["app/routers/\nDesigner endpoints\ncall EmbeddingService"]
+        REDIS3["Redis\nEmbeddingCache backend"]
+    end
+
+    DOCS3["Documents\n(list[Document])"] --> ING_SVC3
+    ING_SVC3 -->|list[Document]| CHUNK_SVC3
+    CHUNK_SVC3 -->|list[Chunk]| QUALITY_SVC3
+    QUALITY_SVC3 -->|filtered list[Chunk]| EMB_SVC
+    EMB_SVC --> EMB_FAC --> FIVE_PROV
+    EMB_SVC <--> CACHE_SVC <--> REDIS3
+    FIVE_PROV -->|list[tuple[Document, Embedding]]| VECTORSTORE_BOX3
+    VECTORSTORE_BOX3 --> RETRIEVAL_BOX3 --> GENERATION_BOX3
+    AGENTS3 --> BENCH_SVC
+    BENCH_SVC --> FIVE_PROV
+    ROUTERS3 --> EMB_SVC
 ```

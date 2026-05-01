@@ -227,57 +227,54 @@ Create all schema files under `apps/api/app/schemas/`:
 
 ---
 
-### P2-1 · Document Ingestion Service
+### ✅ P2-1 · Document Ingestion Service
 **Branch:** `feature/p2-ingestion-service`
 
 > **Depends on:** P1-4 merged
 
 Create `apps/api/app/core/ingestion/`:
 
-- [ ] `loaders.py` — document loaders for: PDF (pypdf), DOCX (python-docx), TXT, Markdown, HTML (beautifulsoup4), CSV, JSON, URL (requests + trafilatura)
-- [ ] `preprocessors.py` — text cleaning: strip HTML tags, normalize whitespace, remove headers/footers, fix encoding
-- [ ] `extractors.py` — metadata extraction: title, author, date, source URL, page numbers, section headers
-- [ ] `__init__.py` — `IngestionService` class with `load(source) -> List[Document]` method
-- [ ] Unit tests in `apps/api/tests/test_core/test_ingestion.py`
+- ✅ `loaders.py` — document loaders for: PDF (pypdf), DOCX (python-docx), TXT, Markdown, HTML (beautifulsoup4), CSV, JSON, URL (requests + trafilatura)
+- ✅ `preprocessors.py` — text cleaning: strip HTML tags, normalize whitespace, remove headers/footers, fix encoding
+- ✅ `extractors.py` — metadata extraction: title, author, date, source URL, page numbers, section headers
+- ✅ `__init__.py` — `IngestionService` class with `load(source) -> List[Document]` method
+- ✅ Unit tests in `apps/api/tests/test_core/test_ingestion.py`
 
 ---
 
-### P2-2 · Chunking Service
+### ✅ P2-2 · Chunking Service
 **Branch:** `feature/p2-chunking-service`
 
 > **Depends on:** P2-1 merged
 
 Create `apps/api/app/core/chunking/`:
 
-- [ ] `strategies.py` — base `ChunkingStrategy` abstract class
-- [ ] `recursive.py` — `RecursiveCharacterChunker` (LangChain `RecursiveCharacterTextSplitter`)
-- [ ] `semantic.py` — `SemanticChunker` (embedding-based split points using cosine similarity)
-- [ ] `document_based.py` — `MarkdownHeaderChunker`, `HTMLSectionChunker`
-- [ ] `code_aware.py` — `CodeAwareChunker` (AST-based splitting for code blocks)
-- [ ] `sentence.py` — `SentenceChunker`, `ParagraphChunker`
-- [ ] `fixed_size.py` — `FixedSizeChunker`
-- [ ] `optimizers.py` — `ChunkQualityScorer` (coherence, completeness, size metrics)
-- [ ] `__init__.py` — `ChunkingService` with `chunk(docs, strategy, chunk_size, overlap) -> List[Chunk]`
-- [ ] Unit tests in `apps/api/tests/test_core/test_chunking.py` — test all 7 strategies
+- ✅ `strategies.py` — `Chunk` type alias, `ChunkingConfig` dataclass, `TextChunker` ABC with `_make_chunk` helper
+- ✅ `recursive.py` — `RecursiveCharacterChunker` (LangChain `RecursiveCharacterTextSplitter`, lazy import)
+- ✅ `semantic.py` — `SemanticChunker` (sentence-transformers cosine similarity, buffered windows, per-instance model cache)
+- ✅ `document_based.py` — `MarkdownHeaderChunker` (LangChain splitter + metadata merge), `HTMLSectionChunker` (BeautifulSoup DOM walk)
+- ✅ `code_aware.py` — `CodeAwareChunker` (Language enum dispatch, 3-level language detection)
+- ✅ `sentence.py` — `SentenceChunker` (regex boundary, sliding window with overlap), `ParagraphChunker` (double-newline split + fallback)
+- ✅ `fixed_size.py` — `FixedSizeChunker` (pure character sliding window, zero external deps)
+- ✅ `optimizers.py` — `ChunkQualityMetrics` dataclass, `ChunkQualityScorer` (density, completeness, size scoring with weight validation)
+- ✅ `__init__.py` — `_STRATEGY_MAP` (8 strategies), `ChunkerFactory`, `ChunkingService` with `chunk()` and `chunk_many()`
+- ✅ Unit tests in `apps/api/tests/test_core/test_chunking.py` — 53 tests covering all 8 strategies, factory, service, scorer, and metadata propagation
 
 ---
 
-### P2-3 · Embedding Service
+### ✅ P2-3 · Embedding Service
 **Branch:** `feature/p2-embedding-service`
 
 > **Depends on:** P1-1 merged (for model catalog), P2-2 merged
 
 Create `apps/api/app/core/embedding/`:
 
-- [ ] `models.py` — `EmbeddingModelWrapper` abstract class + implementations:
-  - `OpenAIEmbedder` (text-embedding-3-small/large/ada-002)
-  - `CohereEmbedder` (embed-v3-english, embed-multilingual-v3)
-  - `HuggingFaceEmbedder` (bge-large, e5-large, all-MiniLM)
-  - `OllamaEmbedder` (local models via Ollama API)
-- [ ] `benchmarker.py` — `EmbeddingBenchmarker`: given sample chunks, runs each model, scores on speed + quality (MTEB-proxy) + cost
-- [ ] `cache.py` — Redis-backed embedding cache (hash chunk text → vector lookup)
-- [ ] `__init__.py` — `EmbeddingService` with `embed(chunks, model) -> List[Vector]`
-- [ ] Unit tests in `apps/api/tests/test_core/test_embedding.py`
+- ✅ `strategies.py` — `Embedding` type alias, `EmbeddingConfig` dataclass, `TextEmbedder` ABC (`embed_documents`, `embed_query`)
+- ✅ `openai.py`, `cohere.py`, `google.py`, `huggingface.py`, `nomic.py` — one `TextEmbedder` implementation per catalog provider (lazy imports; Cohere catalog-ID → API name mapping; Google Gecko → `text-embedding-004`; local models L2-normalised)
+- ✅ `benchmarker.py` — `EmbeddingBenchmarker` + `BenchmarkResult`; ranks configs by `texts_per_second`; skips providers that error
+- ✅ `cache.py` — `EmbeddingCache` (SHA-256 key `provider:model:dimensions:text`, Redis binary pack + in-memory fallback, `embed_with_cache`)
+- ✅ `__init__.py` — `EmbedderFactory`, `EmbeddingService` (`embed`, `embed_query`, `embed_many`) with metadata enrichment (`embedding_model`, `embedding_provider`, `embedding_dimensions`)
+- ✅ Unit tests in `apps/api/tests/test_core/test_embedding.py`
 
 ---
 

@@ -14,9 +14,9 @@
 | 8 | Phase 1 | P1-3 · Python Pydantic Schemas | `feature/p1-python-schemas` | Define backend Pydantic schemas mirroring shared pipeline/domain contracts. | ✅ done |
 | 9 | Phase 1 | P1-4 · Database Schema & Migrations | `feature/p1-database-schema` | Create SQLAlchemy models, Alembic setup, and initial DB migrations. | ✅ done |
 |  | `Phase 2` | `Implement reusable backend RAG services consumed by both Designer and Autopilot modes.` |  |  |  |
-| 10 | Phase 2 | P2-1 · Document Ingestion Service | `feature/p2-ingestion-service` | Implement document loading, preprocessing, and metadata extraction service. | ⬜ pending |
-| 11 | Phase 2 | P2-2 · Chunking Service | `feature/p2-chunking-service` | Implement all chunking strategies and chunk-quality optimization utilities. | ⬜ pending |
-| 12 | Phase 2 | P2-3 · Embedding Service | `feature/p2-embedding-service` | Add embedding model wrappers, benchmarking, and embedding cache layer. | ⬜ pending |
+| 10 | Phase 2 | P2-1 · Document Ingestion Service | `feature/p2-ingestion-service` | Implement document loading, preprocessing, and metadata extraction service. | ✅ done |
+| 11 | Phase 2 | P2-2 · Chunking Service | `feature/p2-chunking-service` | Implement all chunking strategies and chunk-quality optimization utilities. | ✅ done |
+| 12 | Phase 2 | P2-3 · Embedding Service | `feature/p2-embedding-service` | Add embedding model wrappers, benchmarking, and embedding cache layer. | ✅ done |
 | 13 | Phase 2 | P2-4 · Vector Store Service | `feature/p2-vectorstore-service` | Implement vector store clients/factory and indexing/search operations. | ⬜ pending |
 | 14 | Phase 2 | P2-5 · Retrieval Service | `feature/p2-retrieval-service` | Implement retrieval strategies, hybrid search, and reranking workflows. | ⬜ pending |
 | 15 | Phase 2 | P2-6 · Generation Service | `feature/p2-generation-service` | Implement multi-provider LLM generation and RAG chain orchestration. | ⬜ pending |

@@ -2005,3 +2005,597 @@ Flow: **JSON → Pydantic validate → dict → JSONB → ORM → dict → Pydan
 All FK columns that are used as filter predicates are indexed. Primary keys are automatically indexed by PostgreSQL. `status` on `autopilot_builds` is not indexed initially — once volume grows, a partial index on `status = 'running'` is more efficient than a full index.
 
 ---
+
+## P2-1 · Document Ingestion Service
+
+### Document Loading & Format Support
+
+**Q111: Why use LangChain's `Document` type as the universal output rather than defining a custom dataclass?**
+
+`langchain_core.documents.Document` is already a transitive dependency (required by LangChain), provides a standard `page_content` + `metadata` contract, and every downstream service (chunking, embedding, retrieval) in the RAG pipeline expects this type. Defining a custom equivalent would require adapters at every boundary — pure boilerplate with no added value.
+
+---
+
+**Q112: The `DocumentLoader` base class uses an abstract `load` method that accepts `str | Path | bytes`. Why not separate loaders for files vs bytes?**
+
+A single `load` signature allows `LoaderFactory` to dispatch without knowing the source type at the factory level — the caller decides what to pass. It also means a `PDFLoader` can be unit-tested entirely in-memory (passing bytes) without touching the filesystem, which keeps tests fast and hermetic. The trade-off is that each concrete loader must handle the union type with an `isinstance` branch.
+
+---
+
+**Q113: Why does `LoaderFactory.from_extension` normalise the extension with `.lower().lstrip(".")`?**
+
+Users or OS file systems may produce extensions in any casing (`PDF`, `.PDF`, `pdf`) or include the leading dot (from `Path.suffix`). Normalising at the factory boundary means all eight concrete loaders receive a clean key and never need defensive casing logic internally. This is a classic "parse at the boundary" principle — validate/normalise once, trust inside.
+
+---
+
+**Q114: The `PDFLoader` produces one `Document` per page. What are the implications for downstream chunking?**
+
+Each page-level document carries `page_number` and `total_pages` in its metadata, which the chunking service can propagate into every chunk. This preserves provenance so the final retrieved chunk can cite the exact page. The downside is that very short pages (table of contents, blank pages) produce tiny documents — the ingestion service handles this by filtering out documents whose text is empty after preprocessing.
+
+---
+
+**Q115: How does `URLLoader` differ from the file-based loaders in its error handling?**
+
+File loaders raise exceptions on I/O errors (which propagate to the caller). `URLLoader` returns an empty list for both fetch failures and empty extraction results — a network failure is expected and transient, so swallowing it and returning nothing is safer than crashing the ingestion pipeline. The failure is still logged at `WARNING` level so operators can observe it. This is an intentional asymmetry: disk I/O failures are programming errors; network failures are operational events.
+
+---
+
+**Q116: What is `trafilatura` and why was it chosen for URL extraction over `requests` + `BeautifulSoup`?**
+
+`trafilatura` is a focused library for web content extraction. It implements heuristics to identify the main body text of a page (article, documentation, blog post) and discard navigation, ads, sidebars, and boilerplate — tasks that would require substantial custom logic with raw BeautifulSoup. It also handles encoding detection and structured text output. `BeautifulSoup` is still used for `HTMLLoader` where the full raw HTML is already available and needs simple tag stripping.
+
+---
+
+### Text Preprocessing
+
+**Q117: Why are preprocessing transforms implemented as pure module-level functions AND wrapped in a `TextPreprocessor` class?**
+
+Pure functions are independently testable, composable, and reusable outside the class (e.g., calling `fix_encoding` directly in a one-off script). The `TextPreprocessor` class provides a configurable pipeline — it holds user preferences as constructor arguments and calls the pure functions in the correct order. This is the "strategy pattern light": no inheritance or ABCs needed, just a thin orchestration wrapper over pure transforms.
+
+---
+
+**Q118: Why does `TextPreprocessor` always apply `fix_encoding` regardless of the config?**
+
+Encoding issues (null bytes from PDFs, denormalised Unicode from mixed-language docs) can silently corrupt downstream tokenisation and vector embeddings. There is no legitimate use case for keeping null bytes or denormalised Unicode in document text — unlike HTML stripping or header removal, which might be intentionally skipped for certain source types. Making `fix_encoding` non-optional removes an entire class of subtle bugs.
+
+---
+
+**Q119: Explain the `remove_headers_footers` heuristic. What are its limitations?**
+
+The function splits text on form-feed (`\f`) characters — the standard page separator emitted by pypdf — then counts how often each short line appears at the top or bottom of pages. Lines appearing ≥ `min_occurrences` (default 3) times are classified as headers/footers and stripped.
+
+**Limitations:**
+- Requires `\f` separators; DOCX or HTML documents don't have these, so it's a no-op.
+- Threshold-based: a footer that only appears on 2 of 3 pages (e.g., first page has a different footer) won't be caught.
+- May accidentally remove a legitimate repeated phrase (e.g., a chapter title that happens to appear at the bottom of each section page).
+- String equality matching — slight variations (e.g., "Page 1 of 10" vs "Page 2 of 10") are not matched.
+
+---
+
+### Metadata Extraction
+
+**Q120: What is the separation of concerns between `loaders.py` and `extractors.py`?**
+
+`loaders.py` is responsible for parsing the source format and extracting raw text — it sets basic provenance metadata (`source`, `file_type`, `page_number`). `extractors.py` performs a second enrichment pass on the already-parsed content: reading PDF document info dictionaries, DOCX core properties, HTML `<head>` tags, and section heuristics. This separation means the loading step can run even if metadata extraction fails (it logs a warning and returns `{}`), and each concern can evolve independently.
+
+---
+
+**Q121: Why does `extract_section_headers` cap results at 10 in `IngestionService._extract_metadata`?**
+
+Section headers are a lightweight structure signal stored in document metadata, not a primary retrieval index. Storing 100 headers per document wastes metadata space and adds noise. Ten headers capture the document's top-level structure without becoming a content dump. The cap is applied by the service (`headers[:10]`), not the extractor, so callers with different needs can still get the full list from the extractor directly.
+
+---
+
+**Q122: How does `_safe_str` in `extractors.py` protect against PDF/DOCX metadata quirks?**
+
+PDF metadata values can be `None` (field not set), an empty string `""`, a `pypdf` special object, or a real string. `_safe_str` converts any value to `str`, strips whitespace, and returns `None` if the result is empty. This allows the caller to use a compact dict comprehension (`{k: v for k, v in ... if v is not None}`) to drop all missing fields without handling each type separately.
+
+---
+
+### IngestionService Design
+
+**Q123: `IngestionService.load` filters out empty documents after preprocessing. Why not filter before preprocessing?**
+
+Some documents are non-empty raw but become empty after cleaning (e.g., a PDF page containing only a watermark image — pypdf produces an empty string for it; another page may contain only whitespace or HTML boilerplate). Filtering before preprocessing would miss those cases. Filtering after ensures the final `Document` list contains only documents that carry real content to the downstream chunker.
+
+---
+
+**Q124: `IngestionConfig` mirrors fields from `DataIngestionPreprocessingSchema`. Why not reuse the schema directly?**
+
+`DataIngestionPreprocessingSchema` is a Pydantic model living in `app/schemas/` — part of the API boundary layer. `IngestionConfig` is a plain `dataclass` in the core service layer. Using the Pydantic schema in core services would couple the business logic to the API contract, making it harder to change one without affecting the other. The service accepts a simple dataclass; the router layer is responsible for converting the Pydantic schema to `IngestionConfig`.
+
+---
+
+**Q125: Walk through what happens when `IngestionService.load` is called with a bytes source for a PDF.**
+
+1. `_load_raw` detects `source_type="bytes"`, infers extension from `filename` (or uses explicit `file_type`).
+2. `LoaderFactory.from_extension("pdf")` returns a `PDFLoader` instance.
+3. `PDFLoader.load(content, filename=...)` creates a `PdfReader(BytesIO(content))`, iterates pages, returns one `Document` per page.
+4. Back in `load`, `TextPreprocessor.preprocess` cleans each page's text (fix encoding, normalize whitespace).
+5. Empty pages are discarded.
+6. `_extract_metadata` is called: since `file_type` in doc metadata is `"pdf"` and source is bytes, `extract_pdf_metadata(content)` reads title/author/page_count from the PDF info dict.
+7. `extract_file_metadata` is skipped (source is not `"file"` type).
+8. `extract_section_headers` scans the cleaned text and attaches up to 10 headers.
+9. `source.custom_metadata` is merged last (highest precedence).
+10. The resulting `list[Document]` is logged and returned.
+
+---
+
+## P2-2 · Chunking Service
+
+### Core Architecture & Design
+
+**Q126: Why is `Chunk` defined as a type alias (`Chunk = Document`) rather than a separate subclass?**
+
+LangChain's `Document` already carries both `page_content` and `metadata`. A subclass would require either overriding nothing (pure marker type, no value) or adding fields that break interoperability with every LangChain component expecting `Document`. A type alias makes intent clear in signatures (`list[Chunk]`) while keeping zero friction: every utility, splitter, and vector-store wrapper in the LangChain ecosystem accepts `Chunk` directly. A new class would produce silent `isinstance` failures in downstream code.
+
+---
+
+**Q127: `ChunkingConfig` is a plain `dataclass`, not a Pydantic model. Why?**
+
+`ChunkingConfig` is internal service configuration, not an API boundary. Pydantic's validation overhead, JSON serialization, and field aliases add no value when the config is constructed in Python code by the service layer. A `dataclass` gives typed fields and a readable `__repr__` with zero import weight. At the API boundary, `ChunkingConfigSchema` (Pydantic, in `app/schemas/`) converts to `ChunkingConfig` — each layer uses the right tool for its concerns.
+
+---
+
+**Q128: Why does `TextChunker` use an ABC with a single abstract method instead of a protocol?**
+
+A `Protocol` would be correct for structural typing but doesn't enforce implementation at class-definition time — a missing `chunk` method only fails at the call site. `ABC` raises `TypeError` when you try to instantiate an incomplete subclass, giving an immediate developer-friendly error: `"Can't instantiate abstract class X with abstract method chunk"`. Since we own all concrete classes (no third-party implementations), the stricter ABC check is the right choice. If the codebase ever needed to accept third-party chunkers by duck-typing, migrating to Protocol would be straightforward.
+
+---
+
+**Q129: Why is `_make_chunk` a method on `TextChunker` rather than a standalone module function?**
+
+`_make_chunk` is implementation-shared behavior that every concrete chunker uses identically. Placing it on the base class ensures:
+1. Every subclass gets it for free without imports.
+2. If the metadata schema changes (e.g., adding `chunk_hash`), one edit propagates everywhere.
+3. The leading `_` signals "internal helper, not public API" — subclasses use it but callers don't.
+
+A module-level function would work, but it's looser coupling — a subclass could accidentally forget to call it or import a different version.
+
+---
+
+**Q130: What is the `_STRATEGY_MAP` dispatch pattern, and why is it better than a large `if/elif` chain?**
+
+`_STRATEGY_MAP` is a `dict[str, type[TextChunker]]` mapping strategy name strings to chunker classes. It is defined once in `__init__.py` and looked up in `ChunkerFactory.from_strategy`. Benefits:
+- **O(1) lookup** — no sequential string comparisons.
+- **Extensibility without modification** — adding a new strategy requires only a new entry in the dict, not editing `if/elif` branches in two places.
+- **Single source of truth** — `supported_strategies()` returns `sorted(_STRATEGY_MAP.keys())` without any duplication.
+- **Testability** — you can patch a single dict entry rather than mocking branch logic.
+
+The `if/elif` approach would require touching the factory AND the supported-list method on every addition, violating the Open-Closed Principle.
+
+---
+
+### Strategy-Specific Design
+
+**Q131: `FixedSizeChunker` implements its own character-count sliding window instead of using `RecursiveCharacterTextSplitter(separators=[""])`. Why?**
+
+`RecursiveCharacterTextSplitter` applies a hierarchy of separators before falling back to character splitting. Even with `separators=[""]`, it still tokenizes and does boundary logic. `FixedSizeChunker` is the "dumb baseline" — it must guarantee exact `chunk_size` character windows regardless of any boundary. A manual `while start < len(text)` loop is:
+- Deterministic: no separator inference.
+- Zero external dependencies: no LangChain import needed.
+- Faster for benchmarking: the simplest possible baseline to compare other strategies against.
+
+---
+
+**Q132: What are the default separators in `RecursiveCharacterChunker` and why in that specific order?**
+
+Default separators: `["\n\n", "\n", ". ", " ", ""]`.
+
+The order implements a priority hierarchy of semantic boundaries:
+1. `"\n\n"` — paragraph break (highest semantic boundary, split here first).
+2. `"\n"` — single newline (sentence or list-item boundary).
+3. `". "` — sentence end with trailing space (avoids splitting on decimal points like `1.5`).
+4. `" "` — word boundary (last resort before character split).
+5. `""` — character-level (only if no word boundary fits within `chunk_size`).
+
+LangChain's splitter tries the first separator; if the resulting pieces are still too large, it recurses with the next separator. This ensures the smallest semantically-meaningful unit is never split unless necessary.
+
+---
+
+**Q133: `SemanticChunker` builds buffered context windows around sentences. What problem does buffering solve, and what is the cost?**
+
+**Problem:** Two adjacent sentences may share a concept but individually appear semantically unrelated. For example, `"The capital of France."` and `"It is famous for the Eiffel Tower."` — the pronoun "It" makes them related but their isolated embeddings would have low cosine similarity.
+
+**Solution:** `buffer_size=1` means each sentence's "context" is `[prev_sentence, current, next_sentence]` concatenated. The embedding represents the semantic context, not just the sentence.
+
+**Cost:** Buffer size multiplies the embedding call count. With `buffer_size=1` on N sentences, you compute N embeddings of ~3× the length — roughly 3× the embedding tokens. For large documents, this makes semantic chunking significantly more expensive than the fixed-size baseline.
+
+---
+
+**Q134: `SemanticChunker` caches the embedding model in `self._model_cache`. Why not a module-level singleton?**
+
+A module-level singleton would:
+1. Load the model at import time, adding several seconds to startup even if semantic chunking is never used.
+2. Make it impossible to run multiple `SemanticChunker` instances with different models in the same process (e.g., during benchmarking).
+3. Complicate testing — the module-level object persists across tests and requires explicit teardown.
+
+A per-instance dict (`self._model_cache`) loads lazily (only when `chunk()` is first called), supports per-instance isolation, and is trivially mocked in tests by passing a pre-populated `_model_cache` dict or patching `SentenceTransformer`.
+
+---
+
+**Q135: `MarkdownHeaderChunker` merges two metadata dicts: `{**doc.metadata, **split_doc.metadata}`. Why not just use `split_doc.metadata`?**
+
+LangChain's `MarkdownHeaderTextSplitter` returns new `Document` objects whose metadata contains only the header hierarchy (e.g., `{"Header 1": "Introduction", "Header 2": "Background"}`). The original document's provenance metadata — `source`, `file_type`, `page_number`, `author` — is discarded. The merge `{**doc.metadata, **split_doc.metadata}` preserves all parent provenance fields while letting the splitter's header metadata win on key conflicts. Without this merge, every downstream retrieval result would lack the source attribution needed to cite documents to the user.
+
+---
+
+**Q136: How does `HTMLSectionChunker` handle arbitrary nested HTML without a fixed template?**
+
+It uses BeautifulSoup to walk the DOM looking for heading tags (`h1`–`h4`). When a heading is found, it starts a new "section" with that heading as the title. It then collects text from sibling/descendant elements that carry content: `p`, `li`, `td`, `th`, `blockquote`, `pre`, `code`. This element whitelist avoids pulling navigation links, scripts, style tags, and decorative elements. The approach handles arbitrary nesting because BeautifulSoup's tree traversal is recursive — it doesn't depend on the HTML conforming to any specific template. Trade-off: documents without heading tags produce a single large chunk, which the caller should then pass through another splitter or filter.
+
+---
+
+**Q137: `SentenceChunker` uses a regex `(?<=[.!?])\s+` instead of NLTK or spaCy. What are the accuracy and dependency trade-offs?**
+
+| Aspect | Regex | NLTK / spaCy |
+|--------|-------|-------------|
+| Accuracy | ~90% for English prose; fails on abbreviations (`Dr.`, `U.S.`), decimal numbers, ellipsis | >97% accuracy; handles abbreviations, multilingual |
+| Dependencies | None (Python stdlib `re`) | NLTK needs punkt corpus download; spaCy needs language model (50–500 MB) |
+| Startup | Instant | 1–10 s model load |
+| Language support | English only | spaCy: 60+ languages |
+
+For RAG Studio's use case (English-first, startup latency matters, no additional pip dependencies), the regex is the right trade-off. A future upgrade path exists if multilingual support is required.
+
+---
+
+**Q138: `ParagraphChunker` applies a fallback splitter for oversized paragraphs. What triggers the fallback and why `chunk_size * 2`?**
+
+The threshold `len(para) > config.chunk_size * 2` is deliberately loose. A paragraph just over `chunk_size` (e.g., 540 chars when `chunk_size=512`) should stay intact — splitting a tight single paragraph breaks its semantic unity. The `2×` factor accepts moderate oversize before invoking the recursive splitter. The recursive splitter then applies the standard `chunk_size` / `chunk_overlap` settings, so the resulting pieces fit the embedding model's token window. Using exactly `chunk_size` as the threshold would over-split naturally long technical paragraphs.
+
+---
+
+**Q139: `CodeAwareChunker` resolves language through a three-level priority chain. What is the chain and why that order?**
+
+Priority (highest to lowest):
+1. **`config.language`** (explicit config, e.g., `"python"`) — developer intent overrides all inference.
+2. **`file_extension` metadata** (e.g., `.py`, `.ts`) — set by the ingestion layer from the source filename; reliable for single-language files.
+3. **`source` metadata** (URL or path) — fallback if `file_extension` wasn't set explicitly.
+4. **`"python"` default** — safe default; Python's language separators (`\nclass `, `\ndef `) are common in many technical documents.
+
+The order ensures explicit config always wins, file-level signals are used when available, and a deterministic fallback prevents `KeyError` on unknown extensions.
+
+---
+
+### Chunk Quality Scoring
+
+**Q140: What do `content_density`, `completeness`, and `size_score` measure, and why are these three dimensions chosen?**
+
+- **`content_density`** (proportion of non-whitespace chars): Detects "whitespace chunks" — artifacts from blank-line splits or header-only fragments. A chunk of 512 characters that is 70% spaces carries little semantic content for embedding.
+- **`completeness`** (ends with `.`, `!`, or `?`): Detects mid-sentence cuts. An embedding trained on truncated sentences produces less accurate vectors because transformer attention relies on sentence-final context.
+- **`size_score`** (linear proximity to `target_size`): Controls embedding efficiency — very small chunks waste the model's sequence capacity; very large chunks exceed token limits or dilute the semantic signal.
+
+These three cover the primary failure modes of chunking: content-free, truncated, and wrongly-sized chunks. Semantic coherence (a fourth dimension) would require an LLM call, making it too expensive for routine filtering.
+
+---
+
+**Q141: Why does `ChunkQualityScorer.__init__` raise `ValueError` if weights don't sum to 1.0 rather than normalizing them silently?**
+
+Silent normalization would mask misconfiguration. If a caller passes `density_weight=0.5, completeness_weight=0.5, size_weight=0.5`, normalizing gives each weight `~0.33` — the user's intent was to weight density and completeness equally at 50% each, but the size dimension was accidentally included. The error forces explicit intent: users must think about the trade-offs and write weights that sum to 1.0. The `1e-6` tolerance handles floating-point representation errors (e.g., `0.4 + 0.3 + 0.3 == 0.9999999...`).
+
+---
+
+**Q142: The `size_score` formula is `max(0.0, 1.0 - abs(len(text) - target_size) / target_size)`. What does this produce for a chunk at 2× the target size?**
+
+At `len(text) = 2 * target_size`:
+```
+deviation = abs(2*target - target) / target = 1.0
+size_score = max(0.0, 1.0 - 1.0) = 0.0
+```
+A chunk twice the target size scores zero on the size dimension. At 1.5× target: `deviation=0.5`, `size_score=0.5`. At 0.5× target: `deviation=0.5`, `size_score=0.5`. The formula is symmetric around `target_size` and clamps at 0 for chunks larger than `2×target`. This means the overall quality score for an over-large chunk is pulled down but not necessarily below the `min_score` threshold — the density and completeness dimensions can compensate, which is intentional (a long but complete and dense paragraph is still usable).
+
+---
+
+### Service & Factory Design
+
+**Q143: `ChunkingService.chunk` accepts `config: ChunkingConfig | None` with a default of `None`. What is the rationale?**
+
+Making `config` optional with `None → ChunkingConfig()` allows callers to get sensible defaults without boilerplate:
+```python
+chunks = ChunkingService().chunk(docs)  # Uses recursive-character, 512, overlap 50
+```
+This is the Autopilot agent's common pattern — it calls chunking with defaults first, then with tuned configs after optimization. Making `config` required would force every caller to construct a config object, adding ceremony with no safety benefit, since `ChunkingConfig()` itself has validated defaults.
+
+---
+
+**Q144: How would you add a new chunking strategy, say `"sliding-window"`, to this codebase?**
+
+Four steps:
+1. Create `apps/api/app/core/chunking/sliding_window.py` — implement `SlidingWindowChunker(TextChunker)` with a `chunk()` method.
+2. Add `from .sliding_window import SlidingWindowChunker` to `__init__.py`.
+3. Add `"sliding-window": SlidingWindowChunker` to `_STRATEGY_MAP` in `__init__.py`.
+4. Add `"SlidingWindowChunker"` to the `__all__` list in `__init__.py`.
+
+No changes to `ChunkerFactory`, `ChunkingService`, or any existing strategy file are needed. `ChunkerFactory.supported_strategies()` will automatically include `"sliding-window"` on the next call. This demonstrates the Open-Closed Principle: open for extension, closed for modification.
+
+---
+
+**Q145: `SemanticChunker` calls `RecursiveCharacterTextSplitter` as a fallback for oversized chunks. Why not just accept oversized chunks?**
+
+Embedding models have hard token limits (e.g., `all-MiniLM-L6-v2` is 512 tokens). A chunk exceeding this limit is silently truncated by the tokenizer — the embedding represents only the first 512 tokens, discarding everything after. This produces an incorrect semantic embedding that will mislead retrieval. The fallback splitter ensures every output chunk is safe for the configured model by splitting at `config.chunk_size` characters (a conservative proxy for token count). The slight semantic discontinuity from the fallback split is preferable to silent data loss.
+
+---
+
+**Q146: When would you recommend each of the 8 chunking strategies in production?**
+
+| Strategy | Ideal Use Case |
+|----------|---------------|
+| `fixed-size` | Homogeneous, unstructured text; baseline for benchmarking |
+| `recursive-character` | General-purpose default; mixed-format documents |
+| `semantic` | High-quality FAQ/Q&A where semantic coherence matters most; budget allows embeddings |
+| `markdown-header` | Documentation sites, wikis, technical READMEs |
+| `html-section` | Web-scraped content, HTML reports |
+| `sentence-based` | News articles, prose narratives; preserving sentence integrity |
+| `paragraph-based` | Academic papers, legal documents with natural paragraph structure |
+| `code-aware` | Source code repositories; preserves function/class boundaries |
+
+---
+
+**Q147: Multiple chunkers use lazy imports inside `chunk()`. What are the benefits and trade-offs?**
+
+**Benefits:**
+- Chunkers are instantiated at startup for all strategies registered in `_STRATEGY_MAP`, but the heavy imports only occur when `chunk()` is actually called. Strategies never used by a deployment don't add to startup time.
+- If a dependency is missing (e.g., `sentence-transformers` not installed), the error surfaces only when `SemanticChunker.chunk()` is called, not at module import. This allows the service to start even with a partial environment.
+
+**Trade-offs:**
+- Repeated calls re-execute the `from ... import ...` statement, though Python caches module imports in `sys.modules` so there's negligible overhead after the first call.
+- Tooling (IDEs, mypy) may not trace lazy imports, making static analysis slightly weaker.
+
+---
+
+**Q148: Every chunk carries `chunk_index`, `total_chunks`, and `chunk_strategy` metadata fields. Who uses these and why?**
+
+- **`chunk_index` / `total_chunks`**: The Autopilot's `ChunkingOptimizerAgent` uses these to reconstruct document structure, verify coverage (no lost chunks), and detect off-by-one errors in sliding windows. Frontend components can display "Chunk 3 of 12" provenance to users.
+- **`chunk_strategy`**: `ChunkQualityScorer.filter_low_quality` logs the strategy name in the `chunk_filtered_low_quality` event, enabling per-strategy quality analysis. The evaluation agent correlates strategy names with RAGAS scores to identify which strategy produced the worst-quality chunks.
+
+All parent metadata is also propagated (`source`, `page_number`, `author`, etc.) so that every retrieved chunk can be cited back to its original document location.
+
+---
+
+**Q149: When should a caller use `chunk_many` vs. multiple calls to `chunk`?**
+
+`chunk_many` is a convenience wrapper that prevents accumulating partial results in the caller. It's correct to use when documents are logically grouped (e.g., by project or by file batch) and the caller wants a single flat `list[Chunk]` without managing intermediate lists. The current implementation is sequential. In a future async context, `chunk_many` would be the right place to add `asyncio.gather` without changing callers — the single-entry-point design makes that refactor non-breaking.
+
+Multiple calls to `chunk` are better when the caller needs per-group metrics or wants to filter/transform chunks between groups.
+
+---
+
+**Q150: `ChunkingService` is a stateless class with only two methods. Why not just expose module-level functions?**
+
+Stateless classes vs. functions is a style trade-off. In this codebase:
+1. **Consistency**: `IngestionService` and all upcoming `EmbeddingService`, `RetrievalService` classes use the same `XyzService().method()` pattern — callers have a uniform mental model.
+2. **Dependency Injection**: FastAPI's `Depends()` accepts callables and classes. `ChunkingService` can be injected into routers without changing the interface.
+3. **Future state**: `ChunkingService` may need to hold a logger or config — a class makes that non-breaking. Adding state to a module function requires changing the function signature at all call sites.
+4. **Mocking**: `patch("app.core.chunking.ChunkingService")` is cleaner than patching individual module functions during tests.
+
+---
+
+## P2-3 · Embedding Service
+
+### Architecture & Design
+
+**Q151: Walk me through the architecture of the Embedding Service. How does it fit into the wider RAG pipeline?**
+
+The Embedding Service is the third core service in the RAG backend pipeline: `IngestionService → ChunkingService → EmbeddingService → VectorStoreService`.
+
+Architecture layers:
+- **`strategies.py`** — `Embedding = list[float]` type alias, `EmbeddingConfig` dataclass (mirrors `EmbeddingConfigSchema`), and `TextEmbedder` ABC with `embed_documents` and `embed_query` abstract methods.
+- **Provider modules** (`openai.py`, `cohere.py`, `google.py`, `huggingface.py`, `nomic.py`) — one concrete `TextEmbedder` subclass per provider, each with lazy imports and its own model-ID mapping.
+- **`benchmarker.py`** — `EmbeddingBenchmarker` runs multiple `EmbeddingConfig` options against the same corpus and ranks by throughput. Used by the Autopilot Embedding Tester Agent.
+- **`cache.py`** — `EmbeddingCache` is a transparent cache-aside wrapper backed by Redis (binary-packed vectors) with an in-process dict fallback.
+- **`__init__.py`** — `EmbedderFactory` dispatches from provider string to concrete class; `EmbeddingService` orchestrates the full pipeline and enriches output Document metadata.
+
+Input: `list[Document]` (output of `ChunkingService.chunk()`).
+Output: `list[tuple[Document, Embedding]]` — each chunk paired with its vector, ready for vector store upsert.
+
+---
+
+**Q152: Why does `EmbeddingService.embed()` return `list[tuple[Document, Embedding]]` instead of just `list[Embedding]`?**
+
+Keeping Document and vector co-located prevents the caller from managing two parallel lists that must stay in sync across filtering, deduplication, or error recovery steps. The downstream `VectorStoreService.upsert()` needs both the text metadata (for filtering/attribution) and the vector — returning a tuple pair means the caller can never accidentally de-sync them.
+
+The same design reason applies in the vector store: Qdrant and Pinecone upsert APIs accept `(id, vector, payload)` — the payload IS the Document metadata. Passing pairs from the embedding layer maps directly to that API shape.
+
+---
+
+**Q153: The `TextEmbedder` ABC has two abstract methods: `embed_documents` and `embed_query`. Why separate them?**
+
+Some embedding models are trained to produce different vector representations for documents vs. queries to improve retrieval:
+
+- **Cohere Embed v3**: accepts an `input_type` parameter (`"search_document"` vs. `"search_query"`). Documents and queries are encoded with different projection heads for asymmetric retrieval.
+- **E5 models** (HuggingFace): require a `"passage: "` prefix for document text and `"query: "` prefix for query text to achieve best performance.
+- **BGE models**: similarly benefit from prepending `"Represent this sentence: "` for queries.
+
+Having a separate `embed_query` method means each concrete embedder can apply the correct prefix/input_type without the caller knowing. Callers that don't need this distinction simply call `embed_documents` for both.
+
+---
+
+**Q154: Why are all heavy imports (langchain_openai, sentence_transformers, etc.) inside method bodies rather than at the top of each module?**
+
+This is the lazy-import pattern applied consistently across all core services. Reasons:
+1. **Startup speed**: FastAPI starts in milliseconds even if sentence-transformers (which loads PyTorch) is not installed, because the import only fires when `HuggingFaceEmbedder.embed_documents()` is actually called.
+2. **Optional dependencies**: A deployment that only uses OpenAI doesn't need `sentence_transformers` installed. Lazy imports let the app start and serve requests without every optional dependency being present.
+3. **Test isolation**: Tests that mock `embed_documents` never trigger the real import, so the test suite runs without API keys or model downloads.
+
+The trade-off is that `ImportError` surfaces at call time rather than at startup. This is acceptable because provider selection is runtime-configurable; the alternative (failing at startup for a provider not in use) is worse.
+
+---
+
+**Q155: The `EmbeddingConfig` is a plain Python `@dataclass`, not a Pydantic model. Why?**
+
+All `core/` service configs are dataclasses by convention (matching `ChunkingConfig`, `IngestionConfig`). Reasons:
+1. **No validation overhead**: Core services are internal; they receive already-validated data from the Pydantic schema layer (`EmbeddingConfigSchema`). Re-validating at every internal call is redundant.
+2. **No Pydantic dependency inside `core/`**: The core services are self-contained and testable without importing Pydantic, keeping the layer boundary clean.
+3. **Sensible defaults**: `@dataclass` with `field()` defaults allows `EmbeddingConfig()` with no arguments for prototyping, which Pydantic `BaseModel` also supports but with more ceremony.
+4. **Faster instantiation**: Dataclass `__init__` is generated at class definition time; Pydantic v2 builds a Rust-backed validator, which is overkill for a private config object.
+
+---
+
+**Q156: How does the `EmbedderFactory` differ from the `ChunkerFactory`? Are they the same pattern?**
+
+They are the same factory pattern — a module-level dispatch dict (`_PROVIDER_MAP` / `_STRATEGY_MAP`) and a static-method class with `from_X()` and `supported_X()` methods. The only structural difference is the key:
+
+- `ChunkerFactory.from_strategy("recursive-character")` — key is a strategy name string matching `ChunkingStrategy` enum values.
+- `EmbedderFactory.from_provider("openai")` — key is a provider name string matching `EmbeddingProvider` enum values.
+
+Both return instances of the ABC (`TextChunker` / `TextEmbedder`). Both raise `ValueError` for unknown keys. Both expose a `supported_*()` method for introspection. The deliberate consistency means any developer familiar with one factory immediately understands the other.
+
+---
+
+### Provider Wrappers
+
+**Q157: How does the `OpenAIEmbedder` handle the Matryoshka dimensions parameter?**
+
+OpenAI's `text-embedding-3-small` and `text-embedding-3-large` support a `dimensions` parameter that compresses the output vector using Matryoshka Representation Learning (MRL). The legacy `text-embedding-ada-002` does not support this parameter and will error if it's passed.
+
+`OpenAIEmbedder._build_client()` checks `if config.model in _DIMENSIONS_SUPPORTED` before adding `dimensions` to the kwargs — only v3 model IDs are in that set. This means:
+- `EmbeddingConfig(model="text-embedding-3-small", dimensions=512)` → 512-dim vector (cheaper storage)
+- `EmbeddingConfig(model="text-embedding-ada-002", dimensions=512)` → parameter silently omitted, 1536-dim vector returned
+
+---
+
+**Q158: The `CohereEmbedder` maps catalog model IDs like `"cohere-embed-v3"` to Cohere API names like `"embed-english-v3.0"`. Why maintain this mapping instead of using the API name directly in the config?**
+
+The catalog in `data/models/embeddings.json` uses stable, human-readable IDs that the frontend `EmbeddingSelector` component renders. These IDs are also used in `EmbeddingProvider` enum validation and stored in `PipelineConfiguration`. If we stored Cohere's raw API names (`embed-english-v3.0`) in the user-facing config, three problems arise:
+
+1. **Vendor lock-in leak**: internal API naming conventions bleed into the user-facing data model.
+2. **Breaking changes**: if Cohere renames `embed-english-v3.0` to `embed-english-v3` (as they have done historically), every stored pipeline config breaks. The mapping localises the change to one dict in `cohere.py`.
+3. **Catalog coherence**: the frontend's `embeddings.json` catalog can be updated independently of Cohere's API versioning.
+
+---
+
+**Q159: The HuggingFace and Nomic embedders use `normalize_embeddings=True`. What effect does this have and why is it correct here?**
+
+`normalize_embeddings=True` L2-normalises each output vector to unit length (‖v‖ = 1). With unit-norm vectors:
+
+- **Cosine similarity ≡ dot product**: `cos(u, v) = u·v / (‖u‖‖v‖) = u·v` when both are unit vectors. This is a significant speedup in vector stores that implement dot-product ANNS (approximate nearest neighbour search).
+- **Qdrant and other stores default to cosine**: sending pre-normalised vectors avoids double-normalisation inside the vector store.
+- **Catalog alignment**: `normalizable: true` is set for all HuggingFace and Nomic models in `embeddings.json`, confirming that normalisation is appropriate for these model families.
+
+For models like `text-embedding-ada-002` (not normalizable in the catalog), normalisation would distort the magnitude information that the model encodes — which is why only the local-model embedders apply it.
+
+---
+
+### Caching
+
+**Q160: Describe the `EmbeddingCache` design. How does it avoid re-embedding duplicate texts?**
+
+`EmbeddingCache` implements the **cache-aside** pattern:
+
+1. `embed_with_cache(embedder, texts, config)` iterates through all input texts.
+2. For each text, it computes a cache key: `SHA-256("provider:model:dimensions:text")`.
+3. **Cache hit** → return stored vector, no embedder call.
+4. **Cache miss** → collect missed texts into a separate list.
+5. After the full scan, call `embedder.embed_documents(miss_texts, config)` **once** for all misses (batch efficiency preserved).
+6. Store each fresh vector in the cache, then assemble the full result list in original input order.
+
+Storage: Redis primary (binary-packed, 4 bytes/float, TTL-controlled) with a dict fallback for tests/local dev without Redis.
+
+Key design: the cache key includes `dimensions` so that `text-embedding-3-small` with `dimensions=512` and `dimensions=1536` produce different cache entries.
+
+---
+
+**Q161: Why are embeddings stored as binary-packed bytes in Redis rather than JSON?**
+
+Embedding vectors for `text-embedding-3-large` are 3072 floats. Comparison:
+
+| Format | Size per vector |
+|--------|----------------|
+| JSON string (`[0.123, ...]`) | ~25 KB |
+| `struct.pack("3072f", ...)` | **12 KB** |
+
+Binary packing (`struct.pack/unpack` with IEEE-754 single-precision) is:
+- **2× smaller** → less Redis memory and faster network transfer
+- **Faster** to serialise/deserialise than `json.dumps/loads`
+- **Lossless** for the precision we need (single-precision ≈ 7 decimal digits, more than sufficient for cosine similarity ranking)
+
+The trade-off is that Redis keys are not human-readable, but embedding vectors are never intended to be read directly.
+
+---
+
+**Q162: What happens if Redis is unavailable? Does the embedding service fail?**
+
+No. `EmbeddingCache._get_redis()` calls `redis.from_url(...).ping()` on first access. If `ping()` raises (connection refused, timeout, wrong URL), the exception is caught silently, `self._redis` is set to `None`, and the method returns `None`. All subsequent calls skip the Redis branch and use the in-process `_memory` dict.
+
+This makes the service resilient to missing infrastructure. The consequence is that in-memory cache data is lost on process restart and is not shared across multiple API worker processes — acceptable for development, but Redis should be healthy in production.
+
+---
+
+### Benchmarking
+
+**Q163: The `EmbeddingBenchmarker` sorts results by `texts_per_second`. Is throughput the right primary metric for selecting an embedding model?**
+
+Throughput is a good proxy for cost and latency but is not the only signal. The Autopilot agent that calls `EmbeddingBenchmarker` should combine throughput with:
+
+1. **Retrieval quality** (MTEB score or domain-specific recall): the `embedding_sample` field in `BenchmarkResult` can be used to run a small similarity test on domain-relevant query/document pairs.
+2. **Cost per million tokens**: `embeddings.json` provides `costPer1MTokens` — an open-source HuggingFace model with `costPer1MTokens: 0.0` but lower throughput may be cheaper overall than a fast paid API.
+3. **Dimension/storage trade-off**: higher-dimensional vectors cost more to store and search.
+
+Sorting by throughput alone produces a sensible default ranking (the fastest model is usually the cheapest API model), but the `BenchmarkResult` struct carries all the raw data needed for a weighted composite score.
+
+---
+
+**Q164: `BenchmarkResult.embedding_sample` stores the first embedding vector from the benchmark run. What is this for?**
+
+`embedding_sample` lets the caller verify:
+1. **Correct dimensionality**: `len(result.embedding_sample)` equals the actual output dimensions — catches cases where a provider ignores the `dimensions` parameter.
+2. **Vector type**: ensures floats, not integers or strings, were returned.
+3. **Similarity smoke test**: the calling agent can take `embedding_sample` and a known-good reference vector and compute cosine similarity to confirm the model produces meaningful embeddings for the domain corpus before committing to it.
+
+This is especially useful in the Autopilot flow where the agent automatically selects a model — `embedding_sample` provides evidence for the decision log.
+
+---
+
+**Q165: How would you extend the Embedding Service to support a new provider, say Mistral or Jina?**
+
+Four steps:
+1. **Add a provider module** (`mistral.py`): create `MistralEmbedder(TextEmbedder)` with `embed_documents` and `embed_query` methods, using lazy imports.
+2. **Register in `_PROVIDER_MAP`** (`__init__.py`): add `"mistral": MistralEmbedder`.
+3. **Add to `EmbeddingProvider` enum** (`schemas/pipeline.py`): add `MISTRAL = "mistral"`.
+4. **Add to the catalog** (`data/models/embeddings.json`): add the model entry with provider `"mistral"`.
+
+No changes needed to `EmbeddingService`, `EmbedderFactory.supported_providers()`, or any tests that only test the factory dispatch — the strategy map is the single registration point. The design's open-closed property (open for extension, closed for modification) means adding a provider never risks breaking existing ones.
+
+---
+
+### Testing & Operations
+
+**Q166: How do you unit-test `EmbeddingService` without calling OpenAI, Cohere, or loading sentence-transformers weights?**
+
+Use a small concrete `TextEmbedder` subclass in the test module (or a `MagicMock`) that implements `embed_documents` / `embed_query` with deterministic vectors, then patch `app.core.embedding.EmbedderFactory.from_provider` to return that fake. Assertions focus on:
+
+- Correct `list[tuple[Document, Embedding]]` length and ordering
+- Metadata enrichment (`embedding_model`, `embedding_provider`, `embedding_dimensions`) on each output `Document`
+- `embed_many` concatenating groups the same as sequential `embed` calls
+
+This mirrors the chunking tests: mock heavy boundaries, assert orchestration and contracts.
+
+---
+
+**Q167: Why does the first `embed()` call with cache still send duplicate `page_content` strings to `embed_documents` in one batch?**
+
+`EmbeddingCache.embed_with_cache` scans the input list in order; on the first pass nothing is stored yet, so every index is a miss and each string is appended to `miss_texts` — including repeated texts. After `embed_documents` returns, each miss is written to the cache. A **second** `embed()` with the same texts becomes all hits and does not call the provider again.
+
+Deduplicating within a single batch would require an extra pass (text → first index map) and reordering logic; the current design optimises for simplicity and still saves cost across requests and sequential batches.
+
+---
+
+**Q168: What should integration tests cover that these unit tests deliberately skip?**
+
+- Real Redis: verify `SETEX` / `GET` binary round-trip against a live `redis://` instance (e.g. Docker Compose service).
+- One smoke test per provider behind env flags (`RUN_OPENAI_EMBEDDING_SMOKE=1`) with a tiny corpus and real API keys — catches SDK breakage and model deprecations.
+- Dimensionality: assert `len(vector) == expected_dims` from the catalog for each model ID.
+
+---
+
+**Q169: How would you observe embedding latency and cache hit rate in production?**
+
+- `structlog` already emits `embedding_complete` (provider, model, chunk count) and `embedding_cache_result` (hits, misses, total). Ship those fields to your log aggregator and build dashboards (p50/p95 latency from request middleware + embedding events).
+- Add Prometheus counters/histograms in a later phase (`P11-*`) for `embedding_requests_total`, `embedding_cache_hits_total`, `embedding_duration_seconds`.
+
+---
+
+**Q170: If `BenchmarkResult.texts_per_second` is identical for two models, how do you break ties for Autopilot selection?**
+
+Use secondary keys: (1) `avg_latency_ms` variance, (2) catalog `costPer1MTokens`, (3) `dimensions` (lower storage cost), (4) MTEB / domain recall from `embeddings.json`. The benchmarker only sorts by throughput; the agent should implement a stable composite sort for tie-breaking and log the rationale.
+
+---
