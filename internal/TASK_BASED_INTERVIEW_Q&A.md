@@ -2897,3 +2897,192 @@ Add token-budgeted context truncation before building the dataset, persist runs 
 
 ---
 
+## P2-8 · Celery Worker & Task Queue
+
+### Architecture & broker
+
+**Q216: Why introduce Celery when FastAPI already runs async endpoints?**
+
+``async`` handlers keep I/O‑bound waits off the worker thread pool, but **CPU-heavy** work (embedding batches), **minute-scale** orchestration loops (future LangGraph Autopilot), and calls that **cannot be cancelled mid-flight easily** still block an API process once they start. Celery executes those units in dedicated worker processes sourced from Redis, so the FastAPI/Uvicorn event loop stays shallow: enqueue a task, return ``taskId``, and poll or subscribe separately.
+
+---
+
+**Q217: Why is Redis both broker and result backend in this codebase?**
+
+The stack already depended on Redis for caching and Compose wiring. Celery happily uses Redis as a broker (FIFO lists) **and** a result store (serialized task return values keyed by Celery IDs). Dedicated brokers (e.g., RabbitMQ) add operational surface; Redis is adequate for MVP throughput until message durability / priority semantics demand an AMQP topology.
+
+---
+
+**Q218: Why does the Celery bootstrap import path use ``celery -A app.worker:celery_app worker`` rather than importing ``celery_app.py`` alone?**
+
+The ``tasks`` module must register ``@celery_app.task`` handlers on the singleton application object. Loading only ``celery_app`` without importing ``tasks`` would start a worker **with zero registered tasks**. Importing ``app.worker`` executes ``package __init__.py``, which pulls ``celery_app`` then imports ``tasks`` as a deliberate side-effect, guaranteeing registration before worker boot.
+
+---
+
+**Q219: Where does synchronous SQLAlchemy enter the picture if the API uses asyncpg?**
+
+FastAPI resolves DB access through ``asyncpg`` and ``AsyncSession``. Celery task bodies are synchronous coroutine-free Python; bridging them through ``nest_asyncio`` or ad-hoc event loops inside workers is fragile. The Settings therefore expose ``database_url_sync``, rewriting ``postgresql+asyncpg`` → ``postgresql+psycopg`` (and ``sqlite+aiosqlite`` → ``sqlite``) so workers open a conventional sync engine/session with ``sync_session_scope()``.
+
+---
+
+**Q220: Enumerate each implemented task name and payload contract.**
+
+| Task | Purpose | Key arguments |
+|------|---------|---------------|
+| ``jobs.run_pipeline_build`` | Advance ``AutopilotBuild`` rows via **stub stages** pending LangGraph Phase 6 | ``build_id: str`` UUID |
+| ``jobs.run_evaluation`` | Run ``EvaluationEngine.evaluate`` offline and persist aggregates on ``EvaluationRun`` | ``evaluation_run_id``, ``examples`` (list of dicts), optional ``metric_names`` |
+| ``jobs.run_deployment`` | Simulate deployment completion for ``Deployment`` rows | ``deployment_id`` UUID |
+
+---
+
+**Q221: Why pass evaluation **examples inline** rather than storing them purely in Postgres beforehand?**
+
+The ``EvaluationRun`` ORM persists status and outputs, not necessarily the curated test corpus (that arrives via future evaluation APIs). The worker task therefore accepts serialized rows in the enqueue payload—the same eventual shape Autopilot emits after retrieval + generation—so routers can hydrate runs without premature schema churn. When persistence hardens (Phase 8), examples can migrate server-side exclusively.
+
+---
+
+**Q222: Why do job responses serialize ``task_id`` JSON field as camelCase (`taskId`)?**
+
+``RAGBaseModel`` configures ``alias_generator=to_camel``. Client surfaces (Designer/Autopilot) expect camelCase payloads; job endpoints deliberately reuse those schema bases for consistency—even though Celery internals still talk about ``task_id`` strings.
+
+---
+
+**Q223: Which HTTP endpoints glue the API surface to Celery today?**
+
+- ``POST /api/jobs/build/{build_id}`` → ``run_pipeline_build.delay``
+- ``POST /api/jobs/evaluation`` body → ``run_evaluation.delay``
+- ``POST /api/jobs/deployment/{deployment_id}`` → ``run_deployment.delay``
+- ``GET /api/jobs/tasks/{task_id}`` unwraps ``AsyncResult`` state/result/metadata for polling UIs ahead of SSE (Phase 7).
+
+Full domain routers defer to Phase 6/8; these routes are provisional worker plumbing.
+
+---
+
+**Q224: Explain ``task_always_eager``.**
+
+``Settings.celery_task_always_eager`` maps to Celery ``task_always_eager`` so tests or smoke scripts execute tasks synchronously inside the publisher process **without Redis**. Useful for deterministic CI subsets; unacceptable for production parallelism.
+
+---
+
+### Reliability / ops interview angles
+
+**Q225: Why ``task_acks_late=True`` paired with ``worker_prefetch_multiplier=1``?**
+
+Late ack acknowledges a message **after** completion, preventing loss if the worker crashes mid-task (the broker redelivers). Prefetch 1 avoids one greedy worker hoarding queued build jobs while others idle—a common Celery starvation pattern during uneven job durations.
+
+---
+
+**Q226: How would you observe stuck Autopilot builds after this phase?**
+
+Check Redis queue depth, Celery Flower (optional addon), structured logs keyed by ``build_id``, and Postgres ``autopilot_builds.status/current_stage``. The stub task emits ``structlog`` events like ``build_complete_stub`` once messages append and stages mutate.
+
+---
+
+**Q227: How should secrets differ between ``api`` and ``worker`` containers?**
+
+They share the Compose environment block intentionally: both need LLM credentials for evaluations, Postgres for ORM mutations, Redis for broker/back-end parity, and eventual object storage URLs. Separation via IAM roles enters Phase 12.
+
+---
+
+### Trade-offs vs alternatives
+
+**Q228: When would you pick RQ / Dramatiq / Arq instead of Celery?**
+
+RQ/Dramatiq reduce boilerplate for Redis-only fleets; Celery trades minimalism for **ecosystem depth**—retries, chains, canvases—needed before Autopilot’s multi-stage orchestrations land. Migrating remains feasible because task bodies already isolate sync DB boundaries.
+
+---
+
+### ``.gitignore`` / hygiene
+
+**Q229: Did P2-8 introduce new artefacts to ignore?**
+
+Optional local ``celerybeat-schedule`` files if beat is enabled later; current diff only documents env vars in ``.env.example``. No extra ignore entries were mandatory because workers run inside Docker without writing beat schedules into the repo root by default.
+
+---
+
+## P2-9 · Health & Utility Endpoints
+
+### Probes and middleware
+
+**Q230: Why split ``/health``, ``/health/live``, and ``/health/ready``?**
+
+Legacy callers and Docker ``HEALTHCHECK`` continue to hit ``GET /health`` for a trivial liveness JSON. ``/live`` is an explicit **liveness** shim (process up). ``/ready`` runs **readiness** probes: today it checks PostgreSQL, Redis, and Qdrant with short timeouts and returns **503** if any check fails so Kubernetes or load balancers can stop routing traffic before the app is wired to its dependencies.
+
+---
+
+**Q231: Why does ``/health/ready`` skip Redis and Qdrant when ``APP_ENV=test``?**
+
+Pytest sets ``APP_ENV=test`` and must not block on daemons that CI may not start. If readiness used shared ``Depends(get_redis)`` providers, FastAPI would **resolve dependencies before the route body**, potentially opening TCP connections or hanging. The handler short-circuits in test mode after the DB session resolves (SQLite in tests), returning ``200`` with a ``skipped`` explanation.
+
+---
+
+**Q232: Why open ephemeral Redis/Qdrant clients inside ``/ready`` instead of reusing ``get_redis``?**
+
+Module-level singletons are convenient for request paths that always need cache/vector access, but readiness must avoid side effects during test collection and must not poison a shared pool when a probe fails mid-startup. Fresh, small clients with ``aclose()`` / ``close()`` in ``finally`` isolate probe traffic.
+
+---
+
+**Q233: What behaviour do you expect for ``X-Request-ID``?**
+
+If the inbound request already sets ``X-Request-ID``, middleware preserves it, binds it into ``structlog`` context for the request log line, and echoes it on the response. If absent, middleware generates a UUID v4, binds it, and sets the response header so downstream gateways and support tickets can correlate logs.
+
+---
+
+### Utilities surface
+
+**Q234: Which utility routes exist and what are they for?**
+
+| Route | Role |
+|-------|------|
+| ``GET /api/utilities/info`` | Service name, semver, ``APP_ENV``, Python version for dashboards and support |
+| ``POST /api/utilities/validate-pipeline`` | Run ``PipelineConfigurationSchema.model_validate`` without persisting — returns ``valid`` + Pydantic ``errors`` list (HTTP **200** even when invalid so UIs can render field messages) |
+| ``POST /api/utilities/cost`` | Accepts ``CostRequest`` (same shape as future ``POST /api/designer/cost``), returns ``CostEstimateSchema`` |
+
+---
+
+**Q235: Why return HTTP 200 on validation failure instead of 422?**
+
+Designer flows often want a **single response shape** (`valid` + structured errors) across paste/import UX without treating validation as an exceptional HTTP layer. APIs that prefer strict FastAPI behaviour can still POST the same body to a future strict endpoint; this utility is explicitly tolerant.
+
+---
+
+### Cost estimation
+
+**Q236: Where does pricing data load from?**
+
+``load_pricing`` tries, in order: ``Settings.pricing_catalog_path`` (``PRICING_CATALOG_PATH``) if set, then ``apps/api/catalogs/pricing.json`` (bundled for Docker build context), then repo-root ``data/pricing.json``. Missing files raise ``PricingLoadError`` mapped to **503** on ``/cost``.
+
+---
+
+**Q237: How does ``CostEstimator`` relate to ``costCalculatorFormulas`` in ``pricing.json``?**
+
+Per-query **embedding** uses ``(topK * chunkSize / 1e6) * embeddingCostPer1M`` (pipeline ``retrieval.top_k`` and ``chunking.chunk_size``). **Generation** mirrors ``contextTokens`` = retrieved context tokens + avg input tokens from assumptions plus output token pricing. **Reranking** adds ``costPer1KQueries / 1000`` when reranking is enabled. **Monthly** aggregates per-query totals times ``queriesPerMonth`` plus **storage** from vector dimensions and token/chunk estimates, priced via managed-cloud or serverless rows when present, and optional Pinecone **read-unit** style charges surfaced under ``retrieval_ops``.
+
+---
+
+**Q238: Does the estimator amortise one-off corpus indexing separately?**
+
+The shipped formulas in ``pricing.json`` express monthly variable traffic plus storage without a discrete “bulk re-embed cadence”; the implementation follows that split so Phase 4 designer polish can refine amortisation assumptions without breaking the catalogue contract.
+
+---
+
+**Q239: Where is ``API_SEMVER`` defined and why extract it from ``main.py``?**
+
+``app/metadata.py`` exports ``API_SEMVER`` consumed by FastAPI ``version=``, ``/health``, ``/health/ready``, and ``/api/utilities/info`` so probes and docs never drift.
+
+---
+
+### Operations
+
+**Q240: Should production readiness require Redis **and** Qdrant strictly?**
+
+Current policy: **all** probes must succeed before ``200``. That matches “full stack warming” deployments. SaaS tenants that treat Redis/Qdrant as optional could split readiness tiers later (database-only readiness vs extended checks).
+
+---
+
+**Q241: Did P2-9 require `.gitignore` updates?**
+
+No new generated artefacts landed in the repo root; ``catalogs/pricing.json`` is committed intentionally so the slim ``apps/api`` Docker context stays self-contained.
+
+---
+

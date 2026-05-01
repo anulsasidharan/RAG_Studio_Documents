@@ -3,7 +3,10 @@
 ## Docker Deployment
 
 ```bash
-docker-compose -f docker/docker-compose.prod.yml up -d
+docker compose \
+  -f docker/docker-compose.yml \
+  -f docker/docker-compose.prod.yml \
+  up -d
 ```
 
 ## Kubernetes Deployment
