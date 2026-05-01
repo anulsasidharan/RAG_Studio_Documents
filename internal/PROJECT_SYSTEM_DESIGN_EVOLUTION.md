@@ -644,6 +644,7 @@ graph LR
 | P2-1 | Document ingestion core | `apps/api/app/core/ingestion/` — loaders, preprocessors, extractors, `IngestionService` |
 | P2-2 | Chunking core | `apps/api/app/core/chunking/` — 8 strategies, `ChunkerFactory`, `ChunkQualityScorer`, `ChunkingService` |
 | P2-3 | Embedding core | `apps/api/app/core/embedding/` — 5 providers, `EmbeddingCache`, `EmbeddingBenchmarker`, `EmbeddingService` |
+| P2-4 | Vector store core | `apps/api/app/core/vectorstore/` — Qdrant / Pinecone / Weaviate clients, `VectorStoreFactory`, `VectorStoreService` |
 
 ---
 
@@ -889,7 +890,7 @@ graph TB
             end
             CHUNKING["app/core/chunking/\n✅ P2-2"]
             EMBEDDING["app/core/embedding/\n✅ P2-3"]
-            VECTORSTORE["app/core/vectorstore/\n⬜ P2-4"]
+            VECTORSTORE["app/core/vectorstore/\n✅ P2-4"]
             RETRIEVAL["app/core/retrieval/\n⬜ P2-5"]
             GENERATION["app/core/generation/\n⬜ P2-6"]
         end
@@ -1002,8 +1003,8 @@ graph TB
             end
 
             EMBEDDING_BOX["app/core/embedding/\n✅ P2-3"]
-            VECTORSTORE_BOX["app/core/vectorstore/\n⬜ P2-4 next"]
-            RETRIEVAL_BOX["app/core/retrieval/\n⬜ P2-5"]
+            VECTORSTORE_BOX["app/core/vectorstore/\n✅ P2-4"]
+            RETRIEVAL_BOX["app/core/retrieval/\n✅ P2-5"]
             GENERATION_BOX["app/core/generation/\n⬜ P2-6"]
         end
 
@@ -1126,8 +1127,8 @@ graph TB
                 CACHE_SVC["EmbeddingCache\nRedis + memory fallback"]
             end
 
-            VECTORSTORE_BOX3["app/core/vectorstore/ P2-4 next"]
-            RETRIEVAL_BOX3["app/core/retrieval/ P2-5"]
+            VECTORSTORE_BOX3["app/core/vectorstore/ P2-4"]
+            RETRIEVAL_BOX3["app/core/retrieval/ ✅ P2-5"]
             GENERATION_BOX3["app/core/generation/ P2-6"]
         end
 
@@ -1148,3 +1149,152 @@ graph TB
     BENCH_SVC --> FIVE_PROV
     ROUTERS3 --> EMB_SVC
 ```
+
+---
+
+## Phase P2-4 · Vector Store Service
+
+**What changed:** Implemented the fourth core service — the vector persistence and dense search layer. ``VectorStoreService`` accepts parallel ``Document`` lists and embedding vectors (or pre-zipped pairs from ``EmbeddingService``), resolves a provider-specific ``VectorStoreClient`` via ``VectorStoreFactory``, and exposes async ``index`` / ``search`` returning ``ScoredDoc`` instances for the upcoming Retrieval Service. Qdrant is the fully featured default (async client, payload round-trip, optional filters). Pinecone is API-key gated with lazy SDK import. Weaviate uses the v1 REST + GraphQL stack over ``httpx`` so no extra client wheel is required for CI.
+
+### Design Level 13 — Vector Store Package Layout
+
+```mermaid
+graph TD
+    subgraph VS_PKG["app/core/vectorstore/ ✅ P2-4"]
+        STRAT["strategies.py\nVectorStoreClient ABC\nVectorStoreRuntimeConfig\nVectorSearchFilter · ScoredDoc"]
+
+        subgraph IMPL["Provider clients"]
+            QD["qdrant_client.py\nQdrantVectorStore\nAsyncQdrantClient"]
+            PC["pinecone_client.py\nPineconeVectorStore\nasyncio.to_thread"]
+            WV["weaviate_client.py\nWeaviateVectorStore\nhttpx REST + GraphQL"]
+        end
+
+        FACT["factory.py\nVectorStoreFactory.create()"]
+        SVC["__init__.py\nVectorStoreService\nindex · index_pairs · search"]
+    end
+
+    STRAT --> QD & PC & WV
+    FACT --> QD & PC & WV
+    SVC --> FACT
+```
+
+### Design Level 13b — Index and search sequence (Qdrant)
+
+```mermaid
+sequenceDiagram
+    participant R as Router / Worker
+    participant VS as VectorStoreService
+    participant F as VectorStoreFactory
+    participant Q as QdrantVectorStore
+    participant DB as Qdrant
+
+    R->>VS: await index_pairs(pairs, "qdrant", cfg)
+    VS->>F: create("qdrant", cfg, qdrant_client=...)
+    F-->>VS: QdrantVectorStore
+    VS->>Q: ensure_collection(vector_size, metric)
+    Q->>DB: create_collection (if missing)
+    VS->>Q: upsert(points with payload)
+    Q->>DB: upsert batch
+
+    R->>VS: await search(query_vec, "qdrant", cfg, top_k=5)
+    VS->>F: create(...)
+    VS->>Q: search(vector, filters?)
+    Q->>DB: search API
+    DB-->>Q: ScoredPoint hits
+    Q-->>VS: list ScoredDoc
+    VS-->>R: ranked Documents + scores
+```
+
+### Design Level 13c — Vector Store in full RAG core chain
+
+```mermaid
+graph LR
+    ING["IngestionService\nP2-1"] --> CHK["ChunkingService\nP2-2"]
+    CHK --> EMB["EmbeddingService\nP2-3"]
+    EMB --> VS["VectorStoreService\nP2-4"]
+    VS --> RTV["RetrievalService\n✅ P2-5"]
+    RTV --> GEN["GenerationService\nP2-6 next"]
+```
+
+---
+
+## Phase P2-5 · Retrieval Service
+
+**What changed:** Implemented the fifth core service — retrieval orchestration on top of dense vector search. ``RetrievalService`` composes ``VectorStoreService`` with optional ``EmbeddingService`` for MMR re-embedding of candidates, in-memory **BM25** over a caller-supplied chunk corpus for **hybrid** dense+sparse fusion (RRF or weighted normalised blend), **multi-query** RRF when multiple query vectors are provided, **ensemble** RRF across named sub-strategies, **parent-child** uplift using ``parent_id`` / ``parent_page_content`` metadata, and optional **Cohere rerank** (httpx) with passthrough fallback. ``retrieval_runtime_from_pipeline`` maps ``RetrievalConfigSchema`` to runtime dataclasses at the router boundary.
+
+### Design Level 14 — Retrieval package layout
+
+```mermaid
+graph TD
+    subgraph RET_PKG["app/core/retrieval/ ✅ P2-5"]
+        INIT["__init__.py\nRetrievalService\nretrieval_runtime_from_pipeline"]
+
+        subgraph CFG["strategies.py"]
+            RTC["RetrievalRuntimeConfig\nRerankingRuntimeConfig"]
+        end
+
+        subgraph LEX["bm25.py"]
+            BM25["BM25Index · tokenize()\nOkapi BM25 in-memory"]
+        end
+
+        subgraph FUSE["fusion.py"]
+            RRFK["reciprocal_rank_fusion_keys\nRRF on page_content keys"]
+            WDS["weighted_dense_sparse\nα-blend after min-max norm"]
+            MMR["mmr_order\nCosine MMR greedy"]
+        end
+
+        subgraph RERANK["rerankers.py"]
+            COH["CohereReranker\nPOST /v1/rerank"]
+            PASS["PassthroughReranker"]
+        end
+
+        subgraph BR["pipeline_bridge.py"]
+            MAP["retrieval_runtime_from_pipeline\nPydantic → VectorSearchFilter"]
+        end
+
+        SVC["service.py\n_retrieve paths\n_parent_child_uplift"]
+    end
+
+    INIT --> SVC
+    CFG --> SVC
+    BM25 --> SVC
+    RRFK & WDS & MMR --> SVC
+    COH & PASS --> SVC
+    MAP --> INIT
+```
+
+### Design Level 14b — Retrieve sequence (hybrid + rerank)
+
+```mermaid
+sequenceDiagram
+    participant R as Router / Agent
+    participant RS as RetrievalService
+    participant VS as VectorStoreService
+    participant BM as BM25Index
+    participant CR as CohereReranker
+
+    R->>RS: retrieve(query_text, query_vec, cfg, sparse_corpus=chunks)
+    RS->>VS: search(query_vec, top_k=fetch)
+    VS-->>RS: dense ScoredDoc[]
+    RS->>BM: scores(query_text) + top_indices
+    BM-->>RS: sparse ranking
+    RS->>RS: RRF or weighted fusion → fused ScoredDoc[]
+    alt rerank.enabled + cohere
+        RS->>CR: rerank(query, document texts)
+        CR-->>RS: reordered indices
+    end
+    RS-->>R: final ScoredDoc[]
+```
+
+### Design Level 14c — RAG core chain after P2-5
+
+```mermaid
+graph LR
+    ING["IngestionService\nP2-1"] --> CHK["ChunkingService\nP2-2"]
+    CHK --> EMB["EmbeddingService\nP2-3"]
+    EMB --> VS["VectorStoreService\nP2-4"]
+    VS --> RTV["RetrievalService\n✅ P2-5"]
+    RTV --> GEN["GenerationService\nP2-6 next"]
+```
+
+---

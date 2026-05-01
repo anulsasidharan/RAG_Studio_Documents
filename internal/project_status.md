@@ -17,8 +17,8 @@
 | 10 | Phase 2 | P2-1 · Document Ingestion Service | `feature/p2-ingestion-service` | Implement document loading, preprocessing, and metadata extraction service. | ✅ done |
 | 11 | Phase 2 | P2-2 · Chunking Service | `feature/p2-chunking-service` | Implement all chunking strategies and chunk-quality optimization utilities. | ✅ done |
 | 12 | Phase 2 | P2-3 · Embedding Service | `feature/p2-embedding-service` | Add embedding model wrappers, benchmarking, and embedding cache layer. | ✅ done |
-| 13 | Phase 2 | P2-4 · Vector Store Service | `feature/p2-vectorstore-service` | Implement vector store clients/factory and indexing/search operations. | ⬜ pending |
-| 14 | Phase 2 | P2-5 · Retrieval Service | `feature/p2-retrieval-service` | Implement retrieval strategies, hybrid search, and reranking workflows. | ⬜ pending |
+| 13 | Phase 2 | P2-4 · Vector Store Service | `feature/p2-vectorstore-service` | Implement vector store clients/factory and indexing/search operations. | ✅ done |
+| 14 | Phase 2 | P2-5 · Retrieval Service | `feature/p2-retrieval-service` | Implement retrieval strategies, hybrid search, and reranking workflows. | ✅ done |
 | 15 | Phase 2 | P2-6 · Generation Service | `feature/p2-generation-service` | Implement multi-provider LLM generation and RAG chain orchestration. | ⬜ pending |
 | 16 | Phase 2 | P2-7 · Evaluation Engine | `feature/p2-evaluation-engine` | Implement RAG evaluation metrics, test-set generation, and failure analysis. | ⬜ pending |
 | 17 | Phase 2 | P2-8 · Celery Worker & Task Queue | `feature/p2-celery-worker` | Add async task processing for build, evaluation, and deployment jobs. | ⬜ pending |

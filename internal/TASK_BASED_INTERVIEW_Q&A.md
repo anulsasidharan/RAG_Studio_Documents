@@ -2599,3 +2599,161 @@ Deduplicating within a single batch would require an extra pass (text → first 
 Use secondary keys: (1) `avg_latency_ms` variance, (2) catalog `costPer1MTokens`, (3) `dimensions` (lower storage cost), (4) MTEB / domain recall from `embeddings.json`. The benchmarker only sorts by throughput; the agent should implement a stable composite sort for tie-breaking and log the rationale.
 
 ---
+
+## P2-4 · Vector Store Service
+
+### Architecture & API
+
+**Q171: Where does `VectorStoreService` sit in the RAG pipeline relative to `EmbeddingService`?**
+
+`EmbeddingService` outputs `list[tuple[Document, Embedding]]`. `VectorStoreService.index_pairs` consumes that shape directly (or `index` takes parallel lists). The vector store persists each dense vector with a JSON-serialisable payload derived from the `Document` (`page_content` + `metadata`). At query time, `EmbeddingService.embed_query` produces the query vector; `VectorStoreService.search` returns `ScoredDoc` objects for `RetrievalService` (P2-5) to fuse, rerank, or format into LLM context.
+
+---
+
+**Q172: Why is `VectorStoreService` async while `EmbeddingService` is synchronous?**
+
+`AsyncQdrantClient` and remote HTTP (Weaviate REST) are naturally async-bound. Blocking a FastAPI worker thread on vector DB I/O would reduce concurrency under load. Embeddings are often batched CPU/GPU or HTTP calls wrapped by LangChain sync clients — that layer was kept synchronous for simpler use inside Celery tasks or scripts. Routers can `await` the vector store and run `embed_query` in `asyncio.to_thread` if both are needed in one handler without blocking the event loop.
+
+---
+
+**Q173: What is `VectorStoreRuntimeConfig` and why is it not a Pydantic model?**
+
+Same pattern as `EmbeddingConfig` / `ChunkingConfig`: core services use plain `@dataclass` objects for internal speed and to avoid importing the entire schema package inside `app/core/`. `VectorStoreRuntimeConfig` carries `collection_name` (maps from `VectorStoreConfigSchema.index_name`), `vector_size`, `metric`, and optional Pinecone/Weaviate hints. Routers validate `VectorStoreConfigSchema` then map fields into `VectorStoreRuntimeConfig` before calling the service.
+
+---
+
+**Q174: How does `VectorStoreFactory.create` choose the implementation, and what must callers inject?**
+
+`create(provider, config, **kwargs)` dispatches on `provider` string (`qdrant`, `pinecone`, `weaviate`). Qdrant **requires** `qdrant_client=AsyncQdrantClient` (no implicit global client inside `core/` — keeps tests hermetic and avoids hidden settings coupling). Pinecone requires `pinecone_api_key` (or `VectorStoreService` reads `PINECONE_API_KEY`). Weaviate requires `weaviate_url` (or `WEAVIATE_URL`). Unsupported providers raise `VectorStoreConfigurationError` with an explicit list of supported ids.
+
+---
+
+### Qdrant
+
+**Q175: How are LangChain `Document` objects serialised into Qdrant payloads?**
+
+Each `PointStruct` stores `payload = {"page_content": str, "metadata": dict}`. Non-JSON-native metadata values are stringified in `_json_safe_metadata` so Qdrant payload indexing never fails. Round-trip search reconstructs `Document(page_content=..., metadata=...)`. This mirrors how LangChain's own Qdrant integration names fields, making future interoperability easier.
+
+---
+
+**Q176: How are metadata filters (`VectorSearchFilter`) translated to Qdrant `Filter` objects?**
+
+A minimal mapping covers `eq` → `MatchValue`, `in` (string lists) → `MatchAny`, and `contains` → `MatchText` for keyword-style substring search. Keys without a dot prefix are assumed to live under `metadata.<key>` in the payload. Complex boolean trees (`must_not`, nested `should`) are intentionally not fully implemented in P2-4 — the Retrieval layer can post-filter or we extend `_build_qdrant_filter` when product requirements demand it.
+
+---
+
+### Pinecone & Weaviate
+
+**Q177: Why does `PineconeVectorStore` wrap SDK calls in `asyncio.to_thread`?**
+
+The official Pinecone Python SDK exposes synchronous `Index.upsert` / `Index.query`. Running those directly inside an `async def` route would block the event loop. `asyncio.to_thread` offloads blocking work to the default thread pool, preserving async semantics at the `VectorStoreClient` boundary.
+
+---
+
+**Q178: Why is Weaviate implemented with raw `httpx` instead of `weaviate-client`?**
+
+P2-4 aims for an optional second provider without adding another heavy dependency to every Docker image and CI install. The v1 REST schema API plus GraphQL `nearVector` covers create-class, batch upsert with external vectors, and similarity search for integration tests behind mocks. Teams that prefer the official client can wrap `WeaviateVectorStore` later or swap in LangChain's `WeaviateVectorStore` at the orchestration layer.
+
+---
+
+**Q179: What is the security story for `WeaviateVectorStore` class names in GraphQL?**
+
+The class name is interpolated into a GraphQL query string. `__init__` rejects names that are not alphanumeric plus underscore, preventing injection of additional query clauses. For production, prefer allow-listed class names from `vector-stores.json` catalog metadata.
+
+---
+
+### Operations & testing
+
+**Q180: How do you run automated tests without a Docker Qdrant container?**
+
+Tests construct `AsyncQdrantClient(location=":memory:")` — Qdrant's embedded in-process engine. Each test gets an isolated client fixture that `await client.close()` on teardown. This satisfies the TASKS.md requirement for “Qdrant embedded mode” while keeping CI fast.
+
+---
+
+**Q181: When should you call `index(..., recreate_collection=True)`?**
+
+When rebuilding an index from scratch after a breaking change to embedding model or dimensionality. It calls `delete_collection` first (Qdrant drops the collection; Pinecone logs a warning because account-level index deletion is destructive and intentionally not automated). For incremental updates, omit the flag and rely on `upsert` with new point IDs.
+
+---
+
+**Q182: What does `ScoredDoc.score` mean for each provider?**
+
+- **Qdrant**: the engine's native score from `search` (cosine similarity interpretation depends on `Distance` mode — callers should treat it as a relative ranking key unless they calibrate thresholds per model).
+- **Pinecone**: SDK `match.score` (cosine / dot per index metric configuration).
+- **Weaviate**: derived as `1 / (1 + distance)` from `_additional { distance }` so higher is better, aligning loosely with cosine-style UX for UI display.
+
+Retrieval and evaluation layers should normalise scores if they combine multi-source results.
+
+---
+
+## P2-5 · Retrieval Service
+
+### Role in the pipeline
+
+**Q183: What problem does `RetrievalService` solve that `VectorStoreService.search` alone does not?**
+
+Dense `search` returns a single ranked list by vector similarity. Real pipelines need **diversity** (MMR), **lexical recall** (BM25 hybrid), **multiple query embeddings** (multi-query RRF), **strategy ensembles**, **parent/child chunk uplift**, and **cross-encoder reranking**. `RetrievalService` orchestrates those steps, normalises fusion scores where needed, and keeps the vector store client focused on I/O.
+
+---
+
+**Q184: Why is BM25 implemented in-process instead of using Qdrant sparse vectors in P2-5?**
+
+P2-4 indexed only dense vectors. Building a production sparse index inside Qdrant (or OpenSearch) is a separate migration. For P2-5 we still need a **correct hybrid story** for Designer/Autopilot configs: an in-memory `BM25Index` over the same chunk texts the caller used at index time gives deterministic fusion tests and works for moderate corpora. A later phase can swap the sparse leg for native store sparse search without changing the `retrieve(..., sparse_corpus=...)` contract.
+
+---
+
+**Q185: How does hybrid fusion work (`rrf` vs `weighted`)?**
+
+- **RRF (`reciprocal_rank_fusion_keys`)**: builds two orderings — dense hits and BM25 top‑`k` — keyed by normalised `page_content`, then sums `1/(k+rank)` across lists so documents strong in both channels rise without fragile score-scale alignment.
+- **Weighted (`weighted_dense_sparse`)**: min-max normalises dense and BM25 scores per corpus index, then blends with `hybrid_search_alpha` as dense weight (mirrors `HybridSearchConfig.alpha` in the pipeline schema).
+
+---
+
+**Q186: Why does MMR require `embedding_service` on `RetrievalService`?**
+
+MMR needs a vector per candidate chunk to measure redundancy against already selected chunks. Qdrant search results in P2-4 do not return vectors by default. The service **re-embeds** the text of each fetched candidate (same `EmbeddingService` as ingestion) so MMR uses the same model space as the index. If no embedder is configured, the service logs a warning and falls back to top‑`k` dense order.
+
+---
+
+**Q187: How is parent-child retrieval represented without a second index?**
+
+Callers index **child** chunks (small, precise) with metadata such as `parent_id` and optional `parent_page_content`. `retrieve` with `strategy="parent-child"` runs dense search on children, then `_parent_child_uplift` collapses hits by `parent_id`, keeping the best score and swapping in `parent_page_content` when present so the LLM sees expanded context.
+
+---
+
+**Q188: What is the contract for multi-query retrieval?**
+
+Either pass `multi_query_vectors` (aligned with extra variants) or set `RetrievalRuntimeConfig.multi_query_variants` **and** inject `embedding_service` so the service can `embed_query` each variant. Each vector triggers a dense search; rankings are fused with RRF over `page_content` keys. If variants are missing, the service logs and falls back to plain similarity.
+
+---
+
+**Q189: How does ensemble mode avoid infinite recursion?**
+
+`_ensemble` iterates `cfg.ensemble_strategies` and builds a fresh `RetrievalRuntimeConfig` per sub-strategy with `strategy=name`. The dispatcher never calls `ensemble` from within those sub-calls, so the graph is acyclic. Unknown or unsupported members (e.g. `hybrid` without `sparse_corpus`) are skipped with a structured log.
+
+---
+
+**Q190: How is Cohere reranking wired, and what happens if the API fails?**
+
+`RerankingRuntimeConfig` with `enabled=True` and provider/model implying Cohere instantiates `CohereReranker`, which POSTs to `https://api.cohere.ai/v1/rerank` via async `httpx`. Catalog IDs like `cohere-rerank-v3` map to API model names. On any exception, the service logs `cohere_rerank_failed` and falls back to the original order slice so retrieval never hard-fails for reranker outages.
+
+---
+
+**Q191: What does `retrieval_runtime_from_pipeline` do?**
+
+Routers validate `RetrievalConfigSchema` (Pydantic). Core services prefer dataclasses. The bridge converts strategy enum to string, copies `top_k` / `score_threshold`, maps `MetadataFilter` rows to `VectorSearchFilter`, and copies hybrid `alpha`. It keeps `app/core/retrieval` importable without circular schema dependencies in the hot path beyond this one helper.
+
+---
+
+**Q192: How do you unit-test retrieval without paying for embeddings or Cohere?**
+
+Use Qdrant `:memory:` plus `VectorStoreService`, inject a `MagicMock` for `EmbeddingService.embed` / `embed_query` for MMR, and `monkeypatch` `httpx.AsyncClient` for reranker tests — the suite in `tests/test_core/test_retrieval.py` follows this pattern.
+
+---
+
+**Q193: Why did `.gitignore` switch from `docs/internal/` to `docs/internal/*` with negated paths?**
+
+Ignoring a directory wholesale (`docs/internal/`) prevents git from tracking *any* file inside it, including specs you want versioned. The pattern `docs/internal/*` ignores unknown internal artefacts by default while `!docs/internal/TASK_BASED_INTERVIEW_Q&A.md` (and similar) re-includes selected files. The same pattern applies to `prompt_history/*` with `!prompt_history/prompt_history.md` so session logs can be committed without whitelisting arbitrary scratch files.
+
+---
+

@@ -278,19 +278,20 @@ Create `apps/api/app/core/embedding/`:
 
 ---
 
-### P2-4 · Vector Store Service
+### ✅ P2-4 · Vector Store Service
 **Branch:** `feature/p2-vectorstore-service`
 
 > **Depends on:** P2-3 merged, P0-2 merged (Qdrant running)
 
 Create `apps/api/app/core/vectorstore/`:
 
-- [ ] `qdrant_client.py` — create/delete/upsert/search collections in Qdrant
-- [ ] `pinecone_client.py` — Pinecone index management (optional, API-key gated)
-- [ ] `weaviate_client.py` — Weaviate class management (optional)
-- [ ] `factory.py` — `VectorStoreFactory.create(provider, config) -> VectorStoreClient`
-- [ ] `__init__.py` — `VectorStoreService` with `index(chunks, embeddings, provider, config)` and `search(query_vector, top_k, filters) -> List[ScoredDoc]`
-- [ ] Unit tests in `apps/api/tests/test_core/test_vectorstore.py` (use Qdrant embedded mode)
+- ✅ `strategies.py` — `VectorStoreClient` ABC, `VectorStoreRuntimeConfig`, `VectorSearchFilter`, `ScoredDoc`, `VectorStoreConfigurationError`
+- ✅ `qdrant_client.py` — `QdrantVectorStore`: async create/delete/upsert/search via ``AsyncQdrantClient``; payload `page_content` + `metadata`; basic Qdrant ``Filter`` mapping
+- ✅ `pinecone_client.py` — `PineconeVectorStore`: lazy ``pinecone`` SDK import; ``asyncio.to_thread`` for upsert/query; optional ``pinecone_index_host`` (serverless)
+- ✅ `weaviate_client.py` — `WeaviateVectorStore`: v1 REST + GraphQL ``nearVector`` (``httpx`` only; no ``weaviate-client`` dependency)
+- ✅ `factory.py` — `VectorStoreFactory.create(provider, config, **kwargs)` → `VectorStoreClient` (qdrant / pinecone / weaviate)
+- ✅ `__init__.py` — `VectorStoreService` with `index`, `index_pairs`, `search` (async); env fallbacks `PINECONE_API_KEY`, `WEAVIATE_URL`, `WEAVIATE_API_KEY`
+- ✅ Unit tests in `apps/api/tests/test_core/test_vectorstore.py` — Qdrant ``location=":memory:"`` + factory errors + mocked Weaviate REST
 
 ---
 
