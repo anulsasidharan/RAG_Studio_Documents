@@ -31,7 +31,7 @@
 | 23 | Phase 3 | P3-5 · Lib Utilities & Validators | `feature/p3-lib-utilities` | Build validators, constants, and code/diagram generation utilities. | ✅ done |
 |  | `Phase 4` | `Deliver backend APIs required to support all Designer mode workflows.` |  |  |  |
 | 24 | Phase 4 | P4-1 · Projects API | `feature/p4-projects-api` | Implement backend CRUD APIs/services for project management. | ✅ done |
-| 25 | Phase 4 | P4-2 · Designer Config API | `feature/p4-designer-config-api` | Implement save/load/update/delete APIs for pipeline configurations. | ⬜ pending |
+| 25 | Phase 4 | P4-2 · Designer Config API | `feature/p4-designer-config-api` | Implement save/load/update/delete APIs for pipeline configurations. | ✅ done |
 | 26 | Phase 4 | P4-3 · Cost Calculation API | `feature/p4-cost-api` | Implement API/service for pipeline cost estimation and breakdowns. | ⬜ pending |
 | 27 | Phase 4 | P4-4 · Export API | `feature/p4-export-api` | Implement export APIs for Python, YAML, Terraform, Docker, and K8s outputs. | ⬜ pending |
 | 28 | Phase 4 | P4-5 · Templates API | `feature/p4-templates-api` | Implement template listing and template-to-config application APIs. | ⬜ pending |

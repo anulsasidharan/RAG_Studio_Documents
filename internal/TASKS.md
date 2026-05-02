@@ -499,20 +499,20 @@ Create `apps/api/app/routers/projects.py` and `apps/api/app/services/project_ser
 
 ---
 
-### P4-2 · Designer Config API
+### P4-2 · Designer Config API ✅
 **Branch:** `feature/p4-designer-config-api`
 
 > **Depends on:** P4-1, P2-9 merged
 
 Create `apps/api/app/routers/designer.py` and `apps/api/app/services/designer_service.py`:
 
-- [ ] `POST /api/designer/config` — save or create pipeline configuration
-- [ ] `GET /api/designer/config/{id}` — load configuration by ID
-- [ ] `PUT /api/designer/config/{id}` — update existing configuration
-- [ ] `GET /api/designer/configs?project_id=` — list configs for a project
-- [ ] `DELETE /api/designer/config/{id}` — delete configuration
-- [ ] `DesignerService.save_config()`, `DesignerService.load_config()`
-- [ ] Integration tests in `apps/api/tests/test_designer.py`
+- [x] `POST /api/designer/config` — save or create pipeline configuration
+- [x] `GET /api/designer/config/{id}` — load configuration by ID
+- [x] `PUT /api/designer/config/{id}` — update existing configuration
+- [x] `GET /api/designer/configs?project_id=` — list configs for a project
+- [x] `DELETE /api/designer/config/{id}` — delete configuration
+- [x] `DesignerService.save_config()`, `DesignerService.load_config()`
+- [x] Integration tests in `apps/api/tests/test_designer.py`
 
 ---
 
