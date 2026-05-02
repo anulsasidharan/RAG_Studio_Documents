@@ -482,20 +482,20 @@ Create `apps/web/src/app/page.tsx` and landing components in `apps/web/src/compo
 
 ---
 
-### P4-1 · Projects API
+### P4-1 · Projects API ✅
 **Branch:** `feature/p4-projects-api`
 
 > **Depends on:** P1-4, P2-9 merged
 
 Create `apps/api/app/routers/projects.py` and `apps/api/app/services/project_service.py`:
 
-- [ ] `POST /api/projects` — create project
-- [ ] `GET /api/projects` — list projects (paginated)
-- [ ] `GET /api/projects/{id}` — project detail with configs + builds
-- [ ] `PUT /api/projects/{id}` — update name/description
-- [ ] `DELETE /api/projects/{id}` — soft delete
-- [ ] `ProjectService` with full CRUD using SQLAlchemy async sessions
-- [ ] Integration tests in `apps/api/tests/test_projects.py`
+- [x] `POST /api/projects` — create project
+- [x] `GET /api/projects` — list projects (paginated)
+- [x] `GET /api/projects/{id}` — project detail with configs + builds
+- [x] `PUT /api/projects/{id}` — update name/description
+- [x] `DELETE /api/projects/{id}` — soft delete
+- [x] `ProjectService` with full CRUD using SQLAlchemy async sessions
+- [x] Integration tests in `apps/api/tests/test_projects.py`
 
 ---
 
