@@ -2016,3 +2016,190 @@ flowchart TB
 ### Next sub-phase in Phase 4
 
 Templates API — list/apply `data/templates.json` and create `PipelineConfig` rows.
+
+---
+
+## Phase 4 · P4-5 Templates API (completed)
+
+Designer backend can expose curated pipeline presets from the shared JSON catalog and materialize them as first-class saved configurations.
+
+### Behaviour
+
+- **Read paths** (`GET /api/templates`, `GET /api/templates/{id}`): load and validate `data/templates.json` (or `TEMPLATES_CATALOG_PATH` / optional `apps/api/catalogs/templates.json` mirror). No database reads for listing.
+- **Apply** (`POST /api/templates/{id}/apply`): resolve template by id, build a `SaveConfigRequest` (optional `name` / `description` overrides), call `DesignerService.save_config` — same persistence rules as manual Designer create. Response extends `SaveConfigResponse` with `templateId` so clients know which preset was used.
+- **Data fix:** `customer-support` template routing rules were aligned with `RoutingRuleSchema` (`condition` ∈ `keyword` | `query-length` | `semantic-complexity`, `targetModel`, optional `threshold` / `keywords`) so all templates validate as `PipelineConfigurationSchema`.
+
+### Mermaid — Templates API (Phase 4)
+
+```mermaid
+flowchart LR
+  subgraph read [Catalog read — stateless]
+    FE1[Client / P5 gallery]
+    TGET[GET /api/templates]
+    TONE[GET /api/templates/id]
+    TSVC[TemplateService.list / get]
+    TJ[(templates.json)]
+  end
+  subgraph apply [Apply — persists]
+    FE2[Client]
+    TAP[POST .../apply]
+    TAPL[TemplateService.apply]
+    DS[DesignerService.save_config]
+    DB[(Postgres PipelineConfig)]
+  end
+  FE1 --> TGET --> TSVC --> TJ
+  FE1 --> TONE --> TSVC
+  FE2 --> TAP --> TAPL --> DS --> DB
+```
+
+### Phase 4 Designer backend — revised summary
+
+```mermaid
+flowchart TB
+  subgraph p4 [Phase 4 Designer backend]
+    P1[Projects API]
+    P2[Config API]
+    P3[Cost API]
+    P4[Export API]
+    P5[Templates API]
+  end
+  P1 --> DB[(Postgres)]
+  P2 --> DB
+  P3 --> CAT[pricing.json]
+  P4 -.->|stateless| GEN[Text generators]
+  P5 -->|GET| TJ[templates.json]
+  P5 -->|apply| DB
+```
+
+**Correction:** List/get template endpoints are **file-backed**, not DB-backed. Only **apply** writes through `DesignerService` to Postgres.
+
+---
+
+## Phase 4.5 · Guardrails (evolving)
+
+Enterprise safety and policy checks are introduced **around** the existing RAG path without replacing core services. This section grows with each P4.5 sub-phase.
+
+### P4.5-1 · Guardrails Core Infrastructure (completed)
+
+**Scope:** Backend-only foundation in `apps/api/app/core/guardrails/`: abstract `Guardrail`, `GuardrailManager` (ordered per-stage execution with `ALLOW` / `WARN` / `BLOCK` / `MODIFY`), `GuardrailOrchestrator` with typed payloads (`str` for input/output, `RetrievalGuardPayload` for retrieval). Reference stubs `AlwaysAllowGuardrail` and `BlockIfSubstringGuardrail` support tests; real detectors arrive in P4.5-2–4. Pydantic placeholders `GuardrailsConfigSchema` / `GuardrailStageSettingsSchema` prepare pipeline integration (P4.5-5). Structured log line `guardrail_check` on each evaluation.
+
+**Behaviour summary:**
+
+* Stages: `input`, `retrieval`, `output` (`GuardrailStage`).
+* `run_stage` stops on first `BLOCK`; `MODIFY` replaces the in-flight payload for subsequent guardrails in the same stage.
+* No HTTP routes yet; generation and designer APIs will call the orchestrator in P4.5-5.
+
+### Mermaid — RAG without guardrails (baseline before Phase 4.5)
+
+```mermaid
+flowchart LR
+  U[User query] --> API[FastAPI]
+  API --> RAG[RAG core services]
+  RAG --> R[Response]
+```
+
+### Mermaid — P4.5-1 logical layer (hook points only)
+
+```mermaid
+flowchart TB
+  subgraph hooks [Guardrail hook points — P4.5-1]
+    GI[check_input]
+    GR[check_retrieval]
+    GO[check_output]
+  end
+  subgraph core [Existing RAG core — unchanged]
+    ING[Ingestion]
+    CH[Chunking]
+    EMB[Embedding]
+    VS[Vector store]
+    RET[Retrieval]
+    GEN[Generation]
+  end
+  U[User] --> GI
+  GI --> ING
+  ING --> CH --> EMB --> VS
+  U --> RET
+  RET --> GR
+  GR --> GEN
+  GEN --> GO
+  GO --> OUT[Client response]
+```
+
+### Mermaid — GuardrailManager execution (single stage)
+
+```mermaid
+flowchart TD
+  P0[Initial payload] --> G1[Guardrail 1]
+  G1 -->|ALLOW/WARN| G2[Guardrail 2]
+  G1 -->|MODIFY| M1[Updated payload]
+  M1 --> G2
+  G1 -->|BLOCK| STOP[Stage failed — blocked_by]
+  G2 -->|...| OK[GuardrailPipelineResult]
+```
+
+### P4.5-2 · Input Guardrails (completed)
+
+Concrete INPUT implementations live in `apps/api/app/core/guardrails/input/`.
+
+* **PII** — `PiiRedactionGuardrail` redacts email, US-style SSN, credit-card runs that pass Luhn (13–19 digits), and phone-shaped spans. Credit-card detection runs **before** phone redaction so long digit sequences (PANs) are not partially matched as phone numbers.
+* **Prompt injection** — `PromptInjectionGuardrail` blocks on a set of high-signal regex patterns (instruction override / jailbreak-style phrasing); patterns are extensible via constructor args.
+* **Toxicity** — `ToxicityFilterGuardrail` combines optional `blocked_terms` (word-boundary matches) and `extra_patterns`. The default includes only a non-user **self-test** regex so production traffic is not blocked until operators configure terms or patterns (see P4.5-7 for file-based lists).
+
+Registration helper: `register_default_input_guardrails(manager)` — order **PII (first)** → **injection** → **toxicity**. Schema: `InputStageGuardrailsSchema` adds `pii_redaction_enabled`, `prompt_injection_block_enabled`, `toxicity_block_enabled` under `GuardrailsConfigSchema.input`.
+
+### Mermaid — INPUT stage chain (P4.5-2)
+
+```mermaid
+flowchart LR
+  Q[Raw user query] --> PI[PII redaction MODIFY]
+  PI --> INJ[Prompt injection BLOCK]
+  INJ --> TOX[Toxicity BLOCK]
+  TOX --> OK[Allowed / sanitized query to RAG]
+```
+
+### P4.5-3 · Output Guardrails (completed)
+
+Concrete OUTPUT implementations live in `apps/api/app/core/guardrails/output/`.
+
+* **Hallucination heuristic** — `HallucinationHeuristicGuardrail` compares substantive answer tokens to `GuardrailContext.extra["reference_texts"]` with word-boundary matching; low overlap yields **WARN** (skipped when no references).
+* **Factuality** — `FactualityCheckGuardrail` flags **WARN** when date-like strings or large integers in the answer do not appear in reference text (complements overlap).
+* **Citation verification** — `CitationVerificationGuardrail` parses `[n]` citations; invalid indices **BLOCK**; citations with zero sources **WARN**.
+
+Registration: `register_default_output_guardrails(manager)` — order **hallucination** → **factuality** → **citation**. Schema: `OutputStageGuardrailsSchema` under `GuardrailsConfigSchema.output`.
+
+### Mermaid — OUTPUT stage chain (P4.5-3)
+
+```mermaid
+flowchart LR
+  GEN[LLM answer text] --> HH[Hallucination heuristic WARN]
+  HH --> FC[Factuality literals WARN]
+  FC --> CV[Citation verification BLOCK or ALLOW]
+  CV --> OUT[Sanitized / gated response to client]
+  RT[(reference_texts + citation_source_count in context.extra)] -.-> HH
+  RT -.-> FC
+  RT -.-> CV
+```
+
+### Mermaid — Phase 4.5 guardrail coverage (after P4.5-3)
+
+```mermaid
+flowchart TB
+  subgraph IN [INPUT — P4.5-2]
+    PII[PII redaction]
+    INJ[Injection block]
+    TOX[Toxicity block]
+  end
+  subgraph OUT [OUTPUT — P4.5-3]
+    HAL[Hallucination WARN]
+    FAC[Factuality WARN]
+    CIT[Citation BLOCK]
+  end
+  U[User query] --> IN
+  IN --> RAG[RAG core]
+  RAG --> OUT
+  OUT --> R[Response]
+```
+
+### Next sub-phase in Phase 4.5
+
+P4.5-4 · Retrieval Guardrails — content filtering, source validation, bias detection (`RETRIEVAL` stage).

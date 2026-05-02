@@ -26,9 +26,10 @@
 13. [Agent System Architecture](#agent-system-architecture)
 14. [Integration Layer](#integration-layer)
 15. [Deployment Guide](#deployment-guide)
-16. [Development Roadmap](#development-roadmap)
-17. [Testing Strategy](#testing-strategy)
-18. [Success Metrics](#success-metrics)
+16. [Phase 4.5 Guardrails (Enterprise Implementation)](#phase-45-guardrails-enterprise-implementation)
+17. [Development Roadmap](#development-roadmap)
+18. [Testing Strategy](#testing-strategy)
+19. [Success Metrics](#success-metrics)
 
 ---
 
@@ -2957,6 +2958,26 @@ GET /api/deployment/{id}/status
     - status: string
     - endpoint?: string
 ```
+
+---
+
+## 🛡️ Phase 4.5: Guardrails (Enterprise Implementation)
+
+This phase is defined in the **canonical** project matrix (`docs/internal/project_status.md`, S.No 29–35) and checklist (`TASKS.md`). It is scheduled **after Phase 4** (Designer mode backend APIs: projects, designer config, cost, export, templates) and **before Phase 5** (full Designer UI / step-by-step builder).
+
+**Objective:** Implement enterprise-grade guardrails for AI safety, compliance, and quality control.
+
+| Sub-phase | GitHub Branch | Description | Status |
+|-----------|---------------|-------------|--------|
+| P4.5-1 · Guardrails Core Infrastructure | `feature/p4-guardrails-infra` | Build base guardrail classes, manager, and orchestration layer. | ⬜ pending |
+| P4.5-2 · Input Guardrails | `feature/p4-guardrails-input` | Implement PII detection, prompt injection prevention, and toxicity filtering. | ⬜ pending |
+| P4.5-3 · Output Guardrails | `feature/p4-guardrails-output` | Implement hallucination detection, factuality checking, and citation verification. | ⬜ pending |
+| P4.5-4 · Retrieval Guardrails | `feature/p4-guardrails-retrieval` | Implement content filtering, source validation, and bias detection. | ⬜ pending |
+| P4.5-5 · RAG Pipeline Integration | `feature/p4-guardrails-integration` | Integrate guardrails into Generation Service and Designer/Autopilot APIs. | ⬜ pending |
+| P4.5-6 · Monitoring & Metrics | `feature/p4-guardrails-monitoring` | Build guardrail metrics, logging, and safety dashboard endpoints. | ⬜ pending |
+| P4.5-7 · Configuration & Testing | `feature/p4-guardrails-testing` | Add config files, comprehensive tests, and documentation updates. | ⬜ pending |
+
+**Integration notes (spec-level):** Guardrails apply across the RAG path—**input** (user queries), **retrieval** (chunks and sources), and **output** (generated answers)—with **observability** (metrics, logs, optional dashboard APIs) and **configuration** validated by tests. Implementation should align with existing FastAPI services (`apps/api`) and shared pipeline contracts; Designer and Autopilot entry points consume the same guarded generation path once P4.5-5 is delivered.
 
 ---
 

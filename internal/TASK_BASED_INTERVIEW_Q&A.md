@@ -3470,4 +3470,224 @@ Yes. No database session or `X-User-ID`; same pattern as `POST /api/designer/cos
 
 ---
 
+## Phase 4 · P4-5 · Templates API
+
+### What does the Templates API provide?
+
+Three endpoints under `/api/templates`: **list** the full catalog (`GET /api/templates`), **get one** template by stable id (`GET /api/templates/{id}`), and **apply** a template to a project (`POST /api/templates/{id}/apply`). The catalog is `data/templates.json` at the repo root (validated as `TemplatesCatalogResponse` / `PipelineTemplate` with embedded `PipelineConfigurationSchema`).
+
+### Where is the templates file loaded from?
+
+Resolution order matches pricing: optional `TEMPLATES_CATALOG_PATH` env (`templates_catalog_path` in `Settings`), then `apps/api/catalogs/templates.json` if present, then `../../data/templates.json` relative to `apps/api`.
+
+### Does listing templates hit the database?
+
+No. Only JSON validation and response serialization. Same idea as stateless export/cost for read-only catalog data.
+
+### What is the apply request body?
+
+`ApplyTemplateRequest`: `projectId` (required UUID), optional `name` and `description` overrides. If `name` is omitted, the template’s display name is used; description defaults from the template’s top-level description when not overridden.
+
+### How does apply persist configuration?
+
+`TemplateService.apply` constructs a `SaveConfigRequest` from the template’s `config` field and calls `DesignerService.save_config`. The project must belong to the user (`X-User-ID`); otherwise the service returns `None` and the route responds **404** (“Template or project not found”).
+
+### What does the apply response include?
+
+`ApplyTemplateResponse`: same fields as `SaveConfigResponse` (`id`, `name`, `projectId`, `description`, `config`, `createdAt`, `updatedAt`) plus **`templateId`** (the catalog id, e.g. `faq-chatbot`) for UI analytics and redirects.
+
+### How is `metadata.source` set for applied configs?
+
+Templates already use `source: "template"` in JSON; `DesignerService._prepare_new_config` preserves `source` when it is `"template"` (it only defaults to `"designer"` when source is missing).
+
+### Why was `data/templates.json` updated for customer-support?
+
+The **customer-support** template had routing `rules` with free-form `condition` strings and `model` keys. The backend schema requires `RoutingRuleSchema`: `condition` must be `keyword` | `query-length` | `semantic-complexity`, and the target LLM must be `targetModel`. The file was updated to schema-valid rules (e.g. `query-length` + `semantic-complexity` with thresholds) so the catalog loads and validates end-to-end.
+
+### What tests cover templates?
+
+`tests/test_templates.py`: list + get by id, unknown template 404, apply creates a row loadable via `GET /api/designer/config/{id}`, unknown template apply 404, invalid project 404.
+
+### How does this connect to the future Template Gallery (P5-14)?
+
+The gallery page will call `GET /api/templates` for cards and `POST /api/templates/{id}/apply` with the active project id, then navigate to Designer review with the new `config` id returned in the response.
+
+---
+
+*Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*
+
+---
+
+## Phase 4.5 · P4.5-1 Guardrails Core Infrastructure
+
+### What problem does the guardrails core solve?
+
+It provides a **single, extensible pattern** for safety and policy checks at three RAG touchpoints (user input, retrieved context, model output) without duplicating ad hoc validation in every router or service.
+
+### Where does the code live?
+
+Under `apps/api/app/core/guardrails/`: `types.py` (enums and result dataclasses), `base.py` (abstract `Guardrail`), `manager.py` (`GuardrailManager`), `orchestrator.py` (`GuardrailOrchestrator`, `RetrievalGuardPayload`), `stubs.py` (reference implementations). Schemas: `apps/api/app/schemas/guardrails.py`. Tests: `apps/api/tests/test_core/test_guardrails.py`.
+
+### What are the three pipeline stages?
+
+`GuardrailStage.INPUT`, `RETRIEVAL`, and `OUTPUT` — matching where you typically filter or transform the user query, retrieved documents, and generated answer respectively.
+
+### What actions can a single guardrail return?
+
+`GuardrailAction`: `ALLOW`, `WARN`, `BLOCK`, `MODIFY`. `WARN` records a non-fatal notice; `BLOCK` stops the stage; `MODIFY` may set `payload_override` to pass a transformed value to the next guardrail and as the stage’s final payload if the run completes.
+
+### How does `GuardrailManager.run_stage` process multiple guardrails?
+
+It runs registered guardrails **in registration order**. On `BLOCK`, it returns immediately with `allowed=False` and `blocked_by` set to the guardrail name. On `MODIFY` with a non-null `payload_override`, it replaces the working payload before the next check. `ALLOW` and `WARN` leave the payload unchanged.
+
+### What does `GuardrailOrchestrator` add over the manager?
+
+Typed entry points: `check_input(text)`, `check_retrieval(RetrievalGuardPayload)`, `check_output(text)` — each delegates to `run_stage` with the correct `GuardrailStage`. Retrieval payloads carry `query` and `documents` (as an immutable tuple of LangChain `Document`).
+
+### Is the guardrails layer async?
+
+No — checks are synchronous for P4.5-1. Future guardrails that call remote APIs can wrap async work internally or extend the contract in a later task.
+
+### Are there HTTP endpoints for guardrails in P4.5-1?
+
+No. This phase is **library infrastructure only**. APIs and generation wiring are planned for P4.5-5 (RAG Pipeline Integration).
+
+### What is logged when a guardrail runs?
+
+The manager emits a structured log event `guardrail_check` with `guardrail`, `stage`, `action`, and optionally `request_id` when `GuardrailContext.request_id` is set.
+
+### What is `GuardrailContext` used for?
+
+Optional correlation and tenancy metadata: `request_id`, `user_id`, `pipeline_config_id`, `project_id`, plus an `extra` dict for arbitrary labels (e.g. experiment id).
+
+### What Pydantic types were added and why?
+
+`GuardrailStageSettingsSchema` (per-stage `enabled` flag) and `GuardrailsConfigSchema` (input / retrieval / output sections) so future pipeline JSON can toggle stages without ad hoc dicts.
+
+### What are the stub guardrails for?
+
+`AlwaysAllowGuardrail` is a no-op placeholder. `BlockIfSubstringGuardrail` demonstrates **blocking** on a forbidden substring in string payloads (demos/tests only — not a security control).
+
+### How do you unit test a custom guardrail?
+
+Subclass `Guardrail`, implement `name`, `stage`, and `check`, register on a `GuardrailManager`, call `run_stage` or use `GuardrailOrchestrator`. The test suite includes examples: prefix modification chain, warn-only, retrieval empty-query block, and context capture.
+
+### How does this connect to P4.5-2 and later?
+
+P4.5-2–4 add real detectors (PII, toxicity, hallucination heuristics, etc.) as additional `Guardrail` classes registered on the appropriate stages. P4.5-5 calls the orchestrator from the generation path and APIs.
+
+### What should you say in a code review about ordering?
+
+Order matters: put **cheap** checks first (e.g. length, regex) and **expensive** checks (LLM judges) later so `BLOCK` exits early; use `register(..., first=True)` when a guardrail must run before others.
+
+### Does P4.5-1 change `PipelineConfigurationSchema`?
+
+No — guardrails config schemas are standalone so integration can add an optional field in P4.5-5 without breaking existing saved configs.
+
+---
+
+## Phase 4.5 · P4.5-2 Input Guardrails
+
+### What ships in P4.5-2?
+
+Three concrete `Guardrail` classes for `GuardrailStage.INPUT`: `PiiRedactionGuardrail`, `PromptInjectionGuardrail`, and `ToxicityFilterGuardrail`, plus `register_default_input_guardrails()` and `clear_input_guardrails()`.
+
+### Where is the code?
+
+`apps/api/app/core/guardrails/input/` (`pii.py`, `injection.py`, `toxicity.py`, `__init__.py`). Re-exported from `app.core.guardrails`.
+
+### In what order should input guardrails run?
+
+Default registration order: **PII redaction first** (so later checks see redacted text and PANs are not mistaken for phones), then **prompt-injection block**, then **toxicity block**. PII is registered with `first=True` on the manager.
+
+### How does PII redaction behave?
+
+`MODIFY` with `payload_override` when something was redacted; `ALLOW` if nothing matched. Placeholders: `[REDACTED_EMAIL]`, `[REDACTED_SSN]`, `[REDACTED_PHONE]`, `[REDACTED_CARD]`. Cards require **Luhn-valid** digit runs.
+
+### Why is credit-card redaction ordered before phone?
+
+The phone regex can match substrings inside long digit sequences. Running **card (Luhn) before phone** reduces false phone redaction on PAN-like strings.
+
+### How does prompt injection detection work?
+
+Case-insensitive **regex** patterns for phrases such as “ignore previous instructions”, “developer message:”, “jailbreak”, “DAN mode”, etc. A match returns `BLOCK`. The list is not exhaustive; extend via `PromptInjectionGuardrail(patterns=...)`.
+
+### How does toxicity filtering work without an ML model?
+
+`ToxicityFilterGuardrail` applies **optional** `blocked_terms` (word-boundary regex per term) and **`extra_patterns`**. Defaults include only a pattern that matches `___RAG_STUDIO_TOXICITY_SELF_TEST___` so normal users are not blocked until operators add terms or patterns (production lists can be loaded in P4.5-7).
+
+### What Pydantic changes apply to guardrails config?
+
+`GuardrailsConfigSchema.input` is now `InputStageGuardrailsSchema`, which extends `enabled` with `pii_redaction_enabled`, `prompt_injection_block_enabled`, and `toxicity_block_enabled` (all default `True`). The retrieval stage still uses `GuardrailStageSettingsSchema`; the output stage gained per-check flags in **P4.5-3** (`OutputStageGuardrailsSchema`).
+
+### Does `register_default_input_guardrails` read the Pydantic schema?
+
+Not automatically — wiring `InputStageGuardrailsSchema` flags to registration is for **P4.5-5** integration. The helper takes boolean kwargs `pii`, `prompt_injection`, `toxicity` and optional toxicity term/pattern overrides.
+
+### How do you test toxicity without embedding slurs in the repo?
+
+Tests pass `toxicity_blocked_terms=frozenset({"badword"})` and `toxicity_extra_patterns=()` or use the self-test marker string for the default pattern.
+
+### Are HTTP routes added in P4.5-2?
+
+No — same as P4.5-1; API integration is P4.5-5.
+
+### What tests exist?
+
+`apps/api/tests/test_core/test_input_guardrails.py` covers email/SSN/card redaction, injection block, toxicity custom term, registration order, orchestration after PII, and schema defaults.
+
+---
+
+## Phase 4.5 · P4.5-3 Output Guardrails
+
+### What ships in P4.5-3?
+
+Three concrete `Guardrail` classes for `GuardrailStage.OUTPUT`: `HallucinationHeuristicGuardrail`, `FactualityCheckGuardrail`, and `CitationVerificationGuardrail`, plus `register_default_output_guardrails()` and `clear_output_guardrails()`.
+
+### Where is the code?
+
+`apps/api/app/core/guardrails/output/` (`hallucination.py`, `factuality.py`, `citation.py`, `context_refs.py`, `__init__.py`). Re-exported from `app.core.guardrails`.
+
+### In what order do output guardrails run?
+
+Default registration: **hallucination heuristic** → **factuality** → **citation verification**. Citation runs last so invalid `[n]` citations can **BLOCK** after softer **WARN** checks.
+
+### Why does output grounding use `GuardrailContext.extra`?
+
+`GuardrailOrchestrator.check_output` still takes a plain `text: str`; retrieval chunks are passed out-of-band as `GuardrailContext.extra["reference_texts"]` until P4.5-5 attaches them from the RAG pipeline. Optional `extra["citation_source_count"]` overrides how many numbered sources exist for citation validation.
+
+### What does `HallucinationHeuristicGuardrail` do?
+
+When `reference_texts` are present, extracts substantive alphanumeric tokens from the answer, filters a small stop-word set, requires at least eight tokens, and compares **word-boundary** matches against joined references. Below a configurable grounding ratio threshold it returns **WARN** with metadata (`grounding_ratio`, token counts). With no references it **ALLOW**s and records `skipped: no_reference_texts`.
+
+### Why WARN instead of BLOCK for hallucination heuristics?
+
+Lexical overlap is a **weak** signal; false positives would harm UX. Production systems often log WARNs, show disclaimers, or trigger human review. BLOCK is reserved for clear policy violations (here: invalid citations).
+
+### What does `FactualityCheckGuardrail` check?
+
+**Dates** (ISO-like and slash forms) and **integers ≥ 100** (configurable) that appear in the answer must appear as substrings in the joined reference text; otherwise **WARN** with `missing_in_references`. Small integers are ignored to reduce noise from common prose. Decimals are checked if absent from references.
+
+### How does `CitationVerificationGuardrail` work?
+
+Regex finds bracket citations `[1]`, `[2]`, … Valid range is `1` through `citation_source_count` if set in `extra`, else `len(reference_texts)`. Out-of-range indices → **BLOCK**. Citations present with zero allowed sources → **WARN**. No citations → **ALLOW**.
+
+### What Pydantic changes apply to guardrails config?
+
+`GuardrailsConfigSchema.output` is now `OutputStageGuardrailsSchema`, adding `hallucination_heuristic_enabled`, `factuality_check_enabled`, and `citation_verification_enabled` (all default `True`) in addition to `enabled`.
+
+### Does registration read the Pydantic schema automatically?
+
+No — same as input; P4.5-5 will map flags to `register_default_output_guardrails(...)` kwargs.
+
+### What tests cover P4.5-3?
+
+`apps/api/tests/test_core/test_output_guardrails.py` exercises skip paths, WARN paths, BLOCK on bad citations, registration order, orchestrator chain with `blocked_by`, and schema defaults.
+
+### How would you improve these checks in production?
+
+Use NLI or LLM judges for claim verification, structured citation formats (doc IDs), cross-encoder scores against chunks, and calibrated thresholds from offline eval — while keeping heuristics as fast first-line filters.
+
+---
+
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*

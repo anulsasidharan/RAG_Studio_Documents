@@ -34,60 +34,68 @@
 | 25 | Phase 4 | P4-2 · Designer Config API | `feature/p4-designer-config-api` | Implement save/load/update/delete APIs for pipeline configurations. | ✅ done |
 | 26 | Phase 4 | P4-3 · Cost Calculation API | `feature/p4-cost-api` | Implement API/service for pipeline cost estimation and breakdowns. | ✅ done |
 | 27 | Phase 4 | P4-4 · Export API | `feature/p4-export-api` | Implement export APIs for Python, YAML, Terraform, Docker, and K8s outputs. | ✅ done |
-| 28 | Phase 4 | P4-5 · Templates API | `feature/p4-templates-api` | Implement template listing and template-to-config application APIs. | ⬜ pending |
+| 28 | Phase 4 | P4-5 · Templates API | `feature/p4-templates-api` | Implement template listing and template-to-config application APIs. | ✅ done |
+|  | `Phase 4.5` | `Implement enterprise-grade guardrails for AI safety, compliance, and quality control.` |  |  |  |
+| 29 | Phase 4.5 | P4.5-1 · Guardrails Core Infrastructure | `feature/p4-guardrails-infra` | Build base guardrail classes, manager, and orchestration layer. | ✅ done |
+| 30 | Phase 4.5 | P4.5-2 · Input Guardrails | `feature/p4-guardrails-input` | Implement PII detection, prompt injection prevention, and toxicity filtering. | ✅ done |
+| 31 | Phase 4.5 | P4.5-3 · Output Guardrails | `feature/p4-guardrails-output` | Implement hallucination detection, factuality checking, and citation verification. | ✅ done |
+| 32 | Phase 4.5 | P4.5-4 · Retrieval Guardrails | `feature/p4-guardrails-retrieval` | Implement content filtering, source validation, and bias detection. | ⬜ pending |
+| 33 | Phase 4.5 | P4.5-5 · RAG Pipeline Integration | `feature/p4-guardrails-integration` | Integrate guardrails into Generation Service and Designer/Autopilot APIs. | ⬜ pending |
+| 34 | Phase 4.5 | P4.5-6 · Monitoring & Metrics | `feature/p4-guardrails-monitoring` | Build guardrail metrics, logging, and safety dashboard endpoints. | ⬜ pending |
+| 35 | Phase 4.5 | P4.5-7 · Configuration & Testing | `feature/p4-guardrails-testing` | Add config files, comprehensive tests, and documentation updates. | ⬜ pending |
 |  | `Phase 5` | `Complete the full step-by-step visual pipeline builder experience in Designer mode.` |  |  |  |
-| 29 | Phase 5 | P5-1 · Designer Layout & Stage Navigator | `feature/p5-designer-layout` | Build multi-step Designer shell and stage navigation flow. | ⬜ pending |
-| 30 | Phase 5 | P5-2 · Cloud Provider Selector | `feature/p5-cloud-provider-selector` | Build UI for selecting cloud provider from catalog metadata. | ⬜ pending |
-| 31 | Phase 5 | P5-3 · Data Ingestion Configuration | `feature/p5-ingestion-config` | Build ingestion source/file/preprocessing/metadata configuration UI. | ⬜ pending |
-| 32 | Phase 5 | P5-4 · Chunking Configuration | `feature/p5-chunking-config` | Build chunking strategy and parameter configuration UI. | ⬜ pending |
-| 33 | Phase 5 | P5-5 · Embedding Model Selector | `feature/p5-embedding-selector` | Build embedding model discovery/filter/selection UI. | ⬜ pending |
-| 34 | Phase 5 | P5-6 · Vector Store Selector | `feature/p5-vectorstore-selector` | Build vector store selection and provider-specific config UI. | ⬜ pending |
-| 35 | Phase 5 | P5-7 · Retrieval Configuration | `feature/p5-retrieval-config` | Build retrieval strategy, top-k, filters, and reranking UI. | ⬜ pending |
-| 36 | Phase 5 | P5-8 · Generation Model Selector | `feature/p5-generation-selector` | Build generation model and inference parameter selection UI. | ⬜ pending |
-| 37 | Phase 5 | P5-9 · Routing, Memory & Evaluation Config | `feature/p5-routing-memory-eval` | Build routing logic, memory settings, and evaluation options UI. | ⬜ pending |
-| 38 | Phase 5 | P5-10 · Pipeline Visualizer | `feature/p5-pipeline-visualizer` | Render live pipeline graph/summary from current configuration. | ⬜ pending |
-| 39 | Phase 5 | P5-11 · Cost Estimator Component | `feature/p5-cost-estimator` | Show live cost estimates with detailed component breakdowns. | ⬜ pending |
-| 40 | Phase 5 | P5-12 · Code Export Component | `feature/p5-code-exporter` | Build frontend export viewer with copy/download/deploy actions. | ⬜ pending |
-| 41 | Phase 5 | P5-13 · Designer Review Page | `feature/p5-designer-review` | Build final review page with visualizer, cost, export, and actions. | ⬜ pending |
-| 42 | Phase 5 | P5-14 · Template Gallery Page | `feature/p5-template-gallery` | Build template gallery and template-apply user flow. | ⬜ pending |
+| 36 | Phase 5 | P5-1 · Designer Layout & Stage Navigator | `feature/p5-designer-layout` | Build multi-step Designer shell and stage navigation flow. | ⬜ pending |
+| 37 | Phase 5 | P5-2 · Cloud Provider Selector | `feature/p5-cloud-provider-selector` | Build UI for selecting cloud provider from catalog metadata. | ⬜ pending |
+| 38 | Phase 5 | P5-3 · Data Ingestion Configuration | `feature/p5-ingestion-config` | Build ingestion source/file/preprocessing/metadata configuration UI. | ⬜ pending |
+| 39 | Phase 5 | P5-4 · Chunking Configuration | `feature/p5-chunking-config` | Build chunking strategy and parameter configuration UI. | ⬜ pending |
+| 40 | Phase 5 | P5-5 · Embedding Model Selector | `feature/p5-embedding-selector` | Build embedding model discovery/filter/selection UI. | ⬜ pending |
+| 41 | Phase 5 | P5-6 · Vector Store Selector | `feature/p5-vectorstore-selector` | Build vector store selection and provider-specific config UI. | ⬜ pending |
+| 42 | Phase 5 | P5-7 · Retrieval Configuration | `feature/p5-retrieval-config` | Build retrieval strategy, top-k, filters, and reranking UI. | ⬜ pending |
+| 43 | Phase 5 | P5-8 · Generation Model Selector | `feature/p5-generation-selector` | Build generation model and inference parameter selection UI. | ⬜ pending |
+| 44 | Phase 5 | P5-9 · Routing, Memory & Evaluation Config | `feature/p5-routing-memory-eval` | Build routing logic, memory settings, and evaluation options UI. | ⬜ pending |
+| 45 | Phase 5 | P5-10 · Pipeline Visualizer | `feature/p5-pipeline-visualizer` | Render live pipeline graph/summary from current configuration. | ⬜ pending |
+| 46 | Phase 5 | P5-11 · Cost Estimator Component | `feature/p5-cost-estimator` | Show live cost estimates with detailed component breakdowns. | ⬜ pending |
+| 47 | Phase 5 | P5-12 · Code Export Component | `feature/p5-code-exporter` | Build frontend export viewer with copy/download/deploy actions. | ⬜ pending |
+| 48 | Phase 5 | P5-13 · Designer Review Page | `feature/p5-designer-review` | Build final review page with visualizer, cost, export, and actions. | ⬜ pending |
+| 49 | Phase 5 | P5-14 · Template Gallery Page | `feature/p5-template-gallery` | Build template gallery and template-apply user flow. | ⬜ pending |
 |  | `Phase 6` | `Build LangGraph-based Autopilot backend agents to autonomously optimize RAG pipelines.` |  |  |  |
-| 43 | Phase 6 | P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | Set up shared agent state, tools, prompts, and LangGraph foundation. | ⬜ pending |
-| 44 | Phase 6 | P6-2 · Document Analyst Agent | `feature/p6-document-analyst-agent` | Build agent that analyzes document corpus and recommends chunking. | ⬜ pending |
-| 45 | Phase 6 | P6-3 · Chunking Optimizer Agent | `feature/p6-chunking-optimizer-agent` | Build agent to test chunking options and select best configuration. | ⬜ pending |
-| 46 | Phase 6 | P6-4 · Embedding Tester Agent | `feature/p6-embedding-tester-agent` | Build agent to benchmark embeddings by quality/speed/cost goals. | ⬜ pending |
-| 47 | Phase 6 | P6-5 · Retrieval Optimizer Agent | `feature/p6-retrieval-optimizer-agent` | Build agent to tune retrieval strategy and reranking decisions. | ⬜ pending |
-| 48 | Phase 6 | P6-6 · Evaluation Agent | `feature/p6-evaluation-agent` | Build agent to generate test sets, evaluate pipeline, and diagnose issues. | ⬜ pending |
-| 49 | Phase 6 | P6-7 · Deployment Agent | `feature/p6-deployment-agent` | Build packaging/deployment generation plus cloud deployer stubs. | ⬜ pending |
-| 50 | Phase 6 | P6-8 · Autopilot Orchestrator | `feature/p6-autopilot-orchestrator` | Build end-to-end LangGraph orchestration with iteration logic and progress events. | ⬜ pending |
-| 51 | Phase 6 | P6-9 · Autopilot API Endpoints | `feature/p6-autopilot-api` | Build APIs for starting, monitoring, streaming, canceling, and fetching builds. | ⬜ pending |
+| 50 | Phase 6 | P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | Set up shared agent state, tools, prompts, and LangGraph foundation. | ⬜ pending |
+| 51 | Phase 6 | P6-2 · Document Analyst Agent | `feature/p6-document-analyst-agent` | Build agent that analyzes document corpus and recommends chunking. | ⬜ pending |
+| 52 | Phase 6 | P6-3 · Chunking Optimizer Agent | `feature/p6-chunking-optimizer-agent` | Build agent to test chunking options and select best configuration. | ⬜ pending |
+| 53 | Phase 6 | P6-4 · Embedding Tester Agent | `feature/p6-embedding-tester-agent` | Build agent to benchmark embeddings by quality/speed/cost goals. | ⬜ pending |
+| 54 | Phase 6 | P6-5 · Retrieval Optimizer Agent | `feature/p6-retrieval-optimizer-agent` | Build agent to tune retrieval strategy and reranking decisions. | ⬜ pending |
+| 55 | Phase 6 | P6-6 · Evaluation Agent | `feature/p6-evaluation-agent` | Build agent to generate test sets, evaluate pipeline, and diagnose issues. | ⬜ pending |
+| 56 | Phase 6 | P6-7 · Deployment Agent | `feature/p6-deployment-agent` | Build packaging/deployment generation plus cloud deployer stubs. | ⬜ pending |
+| 57 | Phase 6 | P6-8 · Autopilot Orchestrator | `feature/p6-autopilot-orchestrator` | Build end-to-end LangGraph orchestration with iteration logic and progress events. | ⬜ pending |
+| 58 | Phase 6 | P6-9 · Autopilot API Endpoints | `feature/p6-autopilot-api` | Build APIs for starting, monitoring, streaming, canceling, and fetching builds. | ⬜ pending |
 |  | `Phase 7` | `Create real-time Autopilot frontend for build tracking, metrics, decisions, and results.` |  |  |  |
-| 52 | Phase 7 | P7-1 · Document Uploader | `feature/p7-document-uploader` | Build autopilot document upload UI and upload API path. | ⬜ pending |
-| 53 | Phase 7 | P7-2 · Requirements Form | `feature/p7-requirements-form` | Build requirements capture UI for targets, constraints, and optimization goals. | ⬜ pending |
-| 54 | Phase 7 | P7-3 · Build Progress Monitor | `feature/p7-build-progress` | Build real-time build progress tracking via SSE/polling fallback. | ⬜ pending |
-| 55 | Phase 7 | P7-4 · Agent Activity Feed | `feature/p7-agent-activity-feed` | Build agent log stream UI with filter and export support. | ⬜ pending |
-| 56 | Phase 7 | P7-5 · Metrics Dashboard | `feature/p7-metrics-dashboard` | Build live metrics dashboard with trends, latency, and cost views. | ⬜ pending |
-| 57 | Phase 7 | P7-6 · Decision Explainer & Results | `feature/p7-results-summary` | Build explainability and final result visualization screens. | ⬜ pending |
-| 58 | Phase 7 | P7-7 · Autopilot Entry & History Pages | `feature/p7-autopilot-pages` | Build autopilot entry, layout, project listing, and history pages. | ⬜ pending |
+| 59 | Phase 7 | P7-1 · Document Uploader | `feature/p7-document-uploader` | Build autopilot document upload UI and upload API path. | ⬜ pending |
+| 60 | Phase 7 | P7-2 · Requirements Form | `feature/p7-requirements-form` | Build requirements capture UI for targets, constraints, and optimization goals. | ⬜ pending |
+| 61 | Phase 7 | P7-3 · Build Progress Monitor | `feature/p7-build-progress` | Build real-time build progress tracking via SSE/polling fallback. | ⬜ pending |
+| 62 | Phase 7 | P7-4 · Agent Activity Feed | `feature/p7-agent-activity-feed` | Build agent log stream UI with filter and export support. | ⬜ pending |
+| 63 | Phase 7 | P7-5 · Metrics Dashboard | `feature/p7-metrics-dashboard` | Build live metrics dashboard with trends, latency, and cost views. | ⬜ pending |
+| 64 | Phase 7 | P7-6 · Decision Explainer & Results | `feature/p7-results-summary` | Build explainability and final result visualization screens. | ⬜ pending |
+| 65 | Phase 7 | P7-7 · Autopilot Entry & History Pages | `feature/p7-autopilot-pages` | Build autopilot entry, layout, project listing, and history pages. | ⬜ pending |
 |  | `Phase 8` | `Integrate bidirectional handoff between Designer and Autopilot so both remain synchronized.` |  |  |  |
-| 59 | Phase 8 | P8-1 · Designer → Autopilot Handoff | `feature/p8-designer-to-autopilot` | Enable handoff from manual Designer config into Autopilot optimization. | ⬜ pending |
-| 60 | Phase 8 | P8-2 · Autopilot → Designer Visualization | `feature/p8-autopilot-to-designer` | Enable importing autopilot results back into Designer review flow. | ⬜ pending |
-| 61 | Phase 8 | P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | Add evaluation execution/history/compare backend endpoints. | ⬜ pending |
-| 62 | Phase 8 | P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | Add deployment trigger/status/list/teardown backend endpoints. | ⬜ pending |
+| 66 | Phase 8 | P8-1 · Designer → Autopilot Handoff | `feature/p8-designer-to-autopilot` | Enable handoff from manual Designer config into Autopilot optimization. | ⬜ pending |
+| 67 | Phase 8 | P8-2 · Autopilot → Designer Visualization | `feature/p8-autopilot-to-designer` | Enable importing autopilot results back into Designer review flow. | ⬜ pending |
+| 68 | Phase 8 | P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | Add evaluation execution/history/compare backend endpoints. | ⬜ pending |
+| 69 | Phase 8 | P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | Add deployment trigger/status/list/teardown backend endpoints. | ⬜ pending |
 |  | `Phase 9` | `Add MLflow experiment tracking for reproducibility across Autopilot runs.` |  |  |  |
-| 63 | Phase 9 | P9-1 · MLflow Integration | `feature/p9-mlflow-integration` | Add experiment tracking for autopilot runs, metrics, params, and artifacts. | ⬜ pending |
+| 70 | Phase 9 | P9-1 · MLflow Integration | `feature/p9-mlflow-integration` | Add experiment tracking for autopilot runs, metrics, params, and artifacts. | ⬜ pending |
 |  | `Phase 10` | `Achieve comprehensive quality gates through unit, integration, and end-to-end testing.` |  |  |  |
-| 64 | Phase 10 | P10-1 · Backend Unit Tests | `feature/p10-backend-unit-tests` | Build backend unit test suites and target high coverage. | ⬜ pending |
-| 65 | Phase 10 | P10-2 · Backend Integration Tests | `feature/p10-backend-integration-tests` | Build backend integration tests for designer/autopilot/evaluation flows. | ⬜ pending |
-| 66 | Phase 10 | P10-3 · Frontend Unit Tests | `feature/p10-frontend-unit-tests` | Build frontend component/store/unit tests with coverage targets. | ⬜ pending |
-| 67 | Phase 10 | P10-4 · End-to-End Tests | `feature/p10-e2e-tests` | Build Playwright end-to-end tests for key user journeys. | ⬜ pending |
+| 71 | Phase 10 | P10-1 · Backend Unit Tests | `feature/p10-backend-unit-tests` | Build backend unit test suites and target high coverage. | ⬜ pending |
+| 72 | Phase 10 | P10-2 · Backend Integration Tests | `feature/p10-backend-integration-tests` | Build backend integration tests for designer/autopilot/evaluation flows. | ⬜ pending |
+| 73 | Phase 10 | P10-3 · Frontend Unit Tests | `feature/p10-frontend-unit-tests` | Build frontend component/store/unit tests with coverage targets. | ⬜ pending |
+| 74 | Phase 10 | P10-4 · End-to-End Tests | `feature/p10-e2e-tests` | Build Playwright end-to-end tests for key user journeys. | ⬜ pending |
 |  | `Phase 11` | `Implement production-grade observability with structured logs, metrics, and analytics.` |  |  |  |
-| 68 | Phase 11 | P11-1 · Structured Logging | `feature/p11-structured-logging` | Implement structured logging and request/agent traceability. | ⬜ pending |
-| 69 | Phase 11 | P11-2 · Prometheus Metrics | `feature/p11-prometheus-metrics` | Add metrics endpoint, custom metrics, and Prometheus/Grafana integration. | ⬜ pending |
-| 70 | Phase 11 | P11-3 · Cost & Usage Analytics | `feature/p11-usage-analytics` | Add usage/cost analytics APIs and frontend analytics page. | ⬜ pending |
+| 75 | Phase 11 | P11-1 · Structured Logging | `feature/p11-structured-logging` | Implement structured logging and request/agent traceability. | ⬜ pending |
+| 76 | Phase 11 | P11-2 · Prometheus Metrics | `feature/p11-prometheus-metrics` | Add metrics endpoint, custom metrics, and Prometheus/Grafana integration. | ⬜ pending |
+| 77 | Phase 11 | P11-3 · Cost & Usage Analytics | `feature/p11-usage-analytics` | Add usage/cost analytics APIs and frontend analytics page. | ⬜ pending |
 |  | `Phase 12` | `Harden security and performance, then execute production deployment and launch.` |  |  |  |
-| 71 | Phase 12 | P12-1 · Authentication & Authorization | `feature/p12-auth` | Implement auth flows, endpoint protection, and user-level access control. | ⬜ pending |
-| 72 | Phase 12 | P12-2 · Security Hardening | `feature/p12-security-hardening` | Implement security controls, validation, rate limits, and scanning. | ⬜ pending |
-| 73 | Phase 12 | P12-3 · Performance Optimisation | `feature/p12-performance` | Tune performance across cache, DB, API, frontend, and load handling. | ⬜ pending |
-| 74 | Phase 12 | P12-4 · Kubernetes Production Manifests | `feature/p12-kubernetes-manifests` | Create production-ready Kubernetes manifests and verify deployment. | ⬜ pending |
-| 75 | Phase 12 | P12-5 · Final Documentation Pass | `feature/p12-documentation` | Complete product docs, guides, API references, and README polish. | ⬜ pending |
-| 76 | Phase 12 | P12-6 · Production Deployment & Launch | `feature/p12-production-launch` | Execute release, staging validation, production rollout, and release notes. | ⬜ pending |
+| 78 | Phase 12 | P12-1 · Authentication & Authorization | `feature/p12-auth` | Implement auth flows, endpoint protection, and user-level access control. | ⬜ pending |
+| 79 | Phase 12 | P12-2 · Security Hardening | `feature/p12-security-hardening` | Implement security controls, validation, rate limits, and scanning. | ⬜ pending |
+| 80 | Phase 12 | P12-3 · Performance Optimisation | `feature/p12-performance` | Tune performance across cache, DB, API, frontend, and load handling. | ⬜ pending |
+| 81 | Phase 12 | P12-4 · Kubernetes Production Manifests | `feature/p12-kubernetes-manifests` | Create production-ready Kubernetes manifests and verify deployment. | ⬜ pending |
+| 82 | Phase 12 | P12-5 · Final Documentation Pass | `feature/p12-documentation` | Complete product docs, guides, API references, and README polish. | ⬜ pending |
+| 83 | Phase 12 | P12-6 · Production Deployment & Launch | `feature/p12-production-launch` | Execute release, staging validation, production rollout, and release notes. | ⬜ pending |
