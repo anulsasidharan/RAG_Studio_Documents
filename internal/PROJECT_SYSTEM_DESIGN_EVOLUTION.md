@@ -2180,7 +2180,27 @@ flowchart LR
   RT -.-> CV
 ```
 
-### Mermaid — Phase 4.5 guardrail coverage (after P4.5-3)
+### P4.5-4 · Retrieval Guardrails (completed)
+
+Concrete RETRIEVAL implementations live in `apps/api/app/core/guardrails/retrieval/`.
+
+* **Content filtering** — `RetrievedContentFilterGuardrail` removes chunks whose text matches blocked terms or regex patterns (default: self-test marker only). **BLOCK** if no chunks remain.
+* **Source validation** — `SourceProvenanceGuardrail` enforces non-empty metadata keys and optional `https://` for `source_url`. Registered only when keys or HTTPS checks are configured.
+* **Bias detection** — `RetrievalBiasHeuristicGuardrail` **WARN**s when patterns match the query or any chunk (extensible; default self-test only).
+
+Registration: `register_default_retrieval_guardrails(manager)` — **content filter** → **source provenance** (conditional) → **bias heuristic**. Schema: `RetrievalStageGuardrailsSchema` under `GuardrailsConfigSchema.retrieval`.
+
+### Mermaid — RETRIEVAL stage chain (P4.5-4)
+
+```mermaid
+flowchart LR
+  RET[Ranked chunks + query] --> CF[Content filter MODIFY or BLOCK]
+  CF --> SP[Source provenance MODIFY optional]
+  SP --> BH[Bias heuristic WARN]
+  BH --> OK[Filtered payload to generation]
+```
+
+### Mermaid — Phase 4.5 guardrail coverage (after P4.5-4)
 
 ```mermaid
 flowchart TB
@@ -2189,17 +2209,24 @@ flowchart TB
     INJ[Injection block]
     TOX[Toxicity block]
   end
+  subgraph RET [RETRIEVAL — P4.5-4]
+    CF[Content filter]
+    SP[Source provenance]
+    BH[Bias WARN]
+  end
   subgraph OUT [OUTPUT — P4.5-3]
     HAL[Hallucination WARN]
     FAC[Factuality WARN]
     CIT[Citation BLOCK]
   end
   U[User query] --> IN
-  IN --> RAG[RAG core]
-  RAG --> OUT
+  IN --> VS[Vector search / hybrid retrieval]
+  VS --> RET
+  RET --> GEN[Generation]
+  GEN --> OUT
   OUT --> R[Response]
 ```
 
 ### Next sub-phase in Phase 4.5
 
-P4.5-4 · Retrieval Guardrails — content filtering, source validation, bias detection (`RETRIEVAL` stage).
+P4.5-5 · RAG Pipeline Integration — wire guardrails into Generation Service and Designer/Autopilot APIs.

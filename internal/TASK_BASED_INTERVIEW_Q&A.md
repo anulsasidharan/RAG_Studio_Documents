@@ -3690,4 +3690,56 @@ Use NLI or LLM judges for claim verification, structured citation formats (doc I
 
 ---
 
+## Phase 4.5 · P4.5-4 Retrieval Guardrails
+
+### What ships in P4.5-4?
+
+Three concrete `Guardrail` classes for `GuardrailStage.RETRIEVAL`: `RetrievedContentFilterGuardrail`, `SourceProvenanceGuardrail`, and `RetrievalBiasHeuristicGuardrail`, plus `register_default_retrieval_guardrails()` and `clear_retrieval_guardrails()`.
+
+### Where is the code?
+
+`apps/api/app/core/guardrails/retrieval/` (`content_filter.py`, `source_validation.py`, `bias.py`, `__init__.py`). Re-exported from `app.core.guardrails`.
+
+### What payload shape does the RETRIEVAL stage use?
+
+`RetrievalGuardPayload` (`query: str`, `documents: tuple[Document, ...]`) — the same type `GuardrailOrchestrator.check_retrieval` already passes to `GuardrailManager.run_stage`.
+
+### In what order do retrieval guardrails run?
+
+Default registration: **retrieved content filter** (drop bad chunks) → **source provenance** (optional; only registered when requirements are configured) → **bias heuristic** (WARN). Content filter runs first so provenance and bias see the sanitized chunk list.
+
+### Why is `SourceProvenanceGuardrail` sometimes not registered?
+
+If `source_validation=True` but `source_required_keys` is empty and `source_require_https_url` is false, there is nothing to enforce, so the provenance guardrail is omitted to avoid no-op runs. Pass `source_required_keys=frozenset({"doc_id"})` (or enable HTTPS URL checks) to activate it.
+
+### What does `RetrievedContentFilterGuardrail` do?
+
+Same composition as INPUT toxicity: optional `blocked_terms` (word-boundary) and `extra_patterns`. Default patterns match only `___RAG_STUDIO_RETRIEVAL_FILTER_SELF_TEST___`. Matching chunks are removed; **MODIFY** with a shorter document tuple. If **all** chunks match policy, the stage **BLOCK**s.
+
+### What does `SourceProvenanceGuardrail` validate?
+
+Each `Document.metadata` must contain non-empty string values for every key in `required_metadata_keys`. If `require_https_source_url` is true, when `source_url` is present and non-empty it must start with `https://`. Failing chunks are dropped (**MODIFY**); if none remain, **BLOCK**.
+
+### What does `RetrievalBiasHeuristicGuardrail` do?
+
+Scans the query string and each chunk’s `page_content` for regex **patterns** (defaults: self-test marker only). First match returns **WARN** with `where` (`query` or `document[i]`). Does not remove chunks (policy can evolve in P4.5-5 / P4.5-7).
+
+### What Pydantic changes apply?
+
+`GuardrailsConfigSchema.retrieval` is now `RetrievalStageGuardrailsSchema` with `content_filter_enabled`, `source_validation_enabled`, and `bias_detection_enabled` (default `True`), plus inherited `enabled`.
+
+### Are HTTP routes added?
+
+No — library-only; pipeline integration is P4.5-5.
+
+### What tests exist?
+
+`apps/api/tests/test_core/test_retrieval_guardrails.py` covers filter MODIFY/BLOCK, provenance drop/https, bias WARN, registration order, orchestrator chain, and schema defaults.
+
+### How does this relate to the core `app.core.retrieval` service?
+
+Core retrieval returns ranked `Document`s; guardrails are a **policy layer** on that result set before generation. They do not replace vector search — they post-filter and flag.
+
+---
+
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*
