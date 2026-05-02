@@ -3742,4 +3742,148 @@ Core retrieval returns ranked `Document`s; guardrails are a **policy layer** on 
 
 ---
 
+## Phase 4.5 · P4.5-5 RAG Pipeline Integration
+
+### What problem does P4.5-5 solve?
+
+Guardrails were implemented per stage (P4.5-2 … P4.5-4) but not **wired** into a single request path. P4.5-5 connects INPUT → RETRIEVAL (post-retrieval payload) → `GenerationService` → OUTPUT, applies saved **per-stage toggles** from configuration, and exposes **HTTP preview** endpoints for Designer and shared utilities callers.
+
+### Where is the integration code?
+
+- **Policy → manager** — `apps/api/app/core/guardrails/configure_manager.py` (`build_guardrail_manager`).
+- **Orchestrated run** — `apps/api/app/core/rag/guarded_runner.py` (`run_guarded_rag_query`).
+- **API** — `POST /api/designer/rag-preview` and `POST /api/utilities/rag-preview` (same body), implemented via `app/services/rag_preview_service.py`.
+
+### How does `PipelineConfigurationSchema` carry guardrails?
+
+Optional field `guardrails: GuardrailsConfigSchema | None` (JSON camelCase `guardrails`). When omitted, **defaults** match `GuardrailsConfigSchema()` (all sub-stage flags on). Resolved in the runner as `policy = explicit_override or pipeline.guardrails`; `build_guardrail_manager(None)` still applies full defaults.
+
+### What is the execution order?
+
+1. **INPUT** — `GuardrailOrchestrator.check_input(query)`; may MODIFY (e.g. PII redaction) or BLOCK.
+2. **RETRIEVAL** — `check_retrieval(RetrievalGuardPayload(query_after_input, documents))`; may MODIFY (drop chunks) or BLOCK.
+3. **Generation** — `await GenerationService.generate(...)` with the post-guard query and documents.
+4. **OUTPUT** — `check_output(answer, context)` with `GuardrailContext.extra` populated with `reference_texts` and `citation_source_count` from the final chunk list. If OUTPUT **BLOCK**s, the API **does not** return model text (unsafe answer omitted).
+
+### Why pass client-supplied `context_documents` instead of calling `RetrievalService` in the preview?
+
+Phase 4 Designer does not yet bind every deployment to a live vector index in-process. The preview contract matches **“here is what retrieval returned”** so the same guardrail chain applies when Autopilot or a worker later wires real retrieval. Vector lookup can be swapped in without changing guard semantics.
+
+### How do stage `enabled: false` and per-check flags work?
+
+`build_guardrail_manager` clears each stage and registers nothing when that stage’s `enabled` is false. When enabled, individual checks map to `register_default_*_guardrails(..., pii=..., hallucination=..., content_filter=...)` exactly as documented in P4.5-2 … P4.5-4.
+
+### What does the preview response include?
+
+`RagPreviewResponse`: `allowed`, optional `blocked_stage` / `blocked_by`, `query_used`, optional `answer` / `model` / `provider`, three lists of `GuardrailCheckSummary` (input / retrieval / output), and `had_warnings`.
+
+### What tests cover P4.5-5?
+
+`apps/api/tests/test_core/test_guarded_rag_integration.py` — factory respects disabled INPUT stage, injection **BLOCK** on `run_guarded_rag_query`, happy path with mocked LLM, utilities **rag-preview** route integration, orchestrator smoke with configured manager.
+
+### How would you extend this for production RAG?
+
+Add an internal path that obtains `context_documents` from `RetrievalService` + vector store using `pipeline.stages`, reuse the same `run_guarded_rag_query`, stream tokens only after OUTPUT passes (or buffer then validate), and emit metrics (P4.5-6).
+
+---
+
+## Phase 4.5 · P4.5-6 Monitoring & Metrics
+
+### What does P4.5-6 deliver?
+
+**Prometheus-style observability** for guardrails: per-check counters and latency histograms, per-stage allow/block totals, end-to-end guarded RAG outcome counts, a **`GET /metrics`** scrape endpoint (OpenMetrics text), a **`GET /monitoring/guardrails`** JSON snapshot for quick dashboards, and a **`prometheus_metrics_enabled`** setting to disable those routes when needed. Structured logs from P4.5-1 (`guardrail_check` events) remain the narrative complement to numeric metrics.
+
+### Which metrics exist and what are their labels?
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `rag_guardrail_checks_total` | Counter | `stage`, `guardrail`, `action` | One increment per `Guardrail.check()` completion (`allow`, `warn`, `block`, `modify`, …). |
+| `rag_guardrail_stage_results_total` | Counter | `stage`, `outcome` | One increment per `run_stage` completion: `allowed` or `blocked`. |
+| `rag_guardrail_check_duration_seconds` | Histogram | `stage`, `guardrail` | Wall time inside each `check()` call (buckets tuned for sub-second guards). |
+| `rag_guardrail_rag_runs_total` | Counter | `outcome` | One increment per `run_guarded_rag_query` terminal path: `success`, `blocked_input`, `blocked_retrieval`, `blocked_output`. |
+
+### Where is the instrumentation wired?
+
+- **Per check + stage** — `GuardrailManager.run_stage` in `apps/api/app/core/guardrails/manager.py` records check metrics after each result and stage outcome on exit (blocked or full pass).
+- **Pipeline** — `run_guarded_rag_query` in `apps/api/app/core/rag/guarded_runner.py` records the RAG-level outcome on every return path.
+- **Definitions** — `apps/api/app/core/guardrails/metrics.py`.
+
+### Why both stage-level and RAG-level counters?
+
+Stage metrics show **which layer** fires (input vs retrieval vs output) and **which guard** dominated (`action`, `guardrail` label). RAG-level outcomes answer product questions like “what fraction of preview requests were blocked before generation?” without joining every per-check series.
+
+### How do you scrape Prometheus in Kubernetes?
+
+Add a `ServiceMonitor` (Prometheus Operator) or annotate the API service for scraping, target **`/metrics`** on the API port, and set `PROMETHEUS_METRICS_ENABLED=true` (default). Restrict network access to `/metrics` if the endpoint should not be public.
+
+### When would you set `prometheus_metrics_enabled` to false?
+
+Edge deployments where the scrape surface must be absent (404 on `/metrics` and `/monitoring/guardrails`), or when a sidecar exports metrics instead. Tests can override via `PROMETHEUS_METRICS_ENABLED=false` and `get_settings.cache_clear()`.
+
+### What does `GET /monitoring/guardrails` return?
+
+A JSON object `{ "metrics": [ { "name", "labels", "value" }, ... ] }` listing samples whose names start with `rag_guardrail`, derived from the process registry — useful for a minimal admin UI before Grafana is available.
+
+### How are label values sanitized?
+
+Guardrail names and free-text labels are passed through `_label()` in `metrics.py` (non-alphanumeric → `_`, max length) to avoid runaway cardinality from user content while keeping stable series for built-in guard names.
+
+### Does this replace Phase 11 Prometheus work?
+
+No — P4.5-6 is **guardrail-focused** metrics and routes. Phase **P11-2** can add service-wide HTTP metrics, business KPIs, and Grafana dashboards that **include** these series alongside request latency and DB health.
+
+### What tests cover P4.5-6?
+
+`apps/api/tests/test_guardrail_metrics.py` — delta assertions on registry samples, `/metrics` body contains `rag_guardrail_*`, JSON snapshot route, disabled-metrics 404.
+
+### How would you alert on this in production?
+
+Example PromQL: high rate of `rag_guardrail_rag_runs_total{outcome="blocked_output"}` vs `success`, or spikes in `rag_guardrail_checks_total{action="block"}`. Pair with logs via `request_id` in `GuardrailContext` for drill-down.
+
+---
+
+## Phase 4.5 · P4.5-7 Configuration & Testing
+
+### What does P4.5-7 add on top of earlier guardrail phases?
+
+**File-based operator policies** for three areas: **INPUT toxicity** (blocked terms + regex), **RETRIEVAL content filter** (same shape), and **RETRIEVAL bias heuristic** (regex only). Paths are optional **environment variables** mapped through `Settings`; empty paths mean the same **code defaults** as before (self-test markers so CI and idle traffic behave predictably). **Tests** cover parsing, invalid regex failure, missing-file warning, and end-to-end **blocked INPUT** / **WARN retrieval** when policies are set.
+
+### Why separate JSON files from the saved pipeline `guardrails` object?
+
+Pipeline JSON encodes **which stages and checks are on** for a design. Operator word lists and regex policies change on **compliance** or **locale** cadence without editing every saved config. Mounting JSON from ConfigMaps, secrets, or `config/guardrails/local/` keeps **policy data** out of application code while **semantics** stay in the guardrail classes.
+
+### What is the JSON schema for toxicity and content-filter files?
+
+Each file is a JSON object with **`blocked_terms`**: array of strings (word-boundary matching after trim), and **`regex_patterns`**: array of **Python `re` patterns**. Loaded regexes are compiled in order; a bad pattern raises **`ValueError`** at load time. After load, patterns are **appended** to the built-in default extra patterns (self-test markers) so tests and safe defaults remain unless you replace behaviour in code.
+
+### What is the JSON schema for bias patterns?
+
+A single array field **`regex_patterns`**. Patterns are compiled and **merged** with the default bias self-test pattern tuple. Matches still produce **WARN**, not **BLOCK**, consistent with P4.5-4.
+
+### Which environment variables map to `Settings`?
+
+`GUARDRAILS_TOXICITY_POLICY_PATH`, `GUARDRAILS_CONTENT_FILTER_POLICY_PATH`, and `GUARDRAILS_BIAS_PATTERNS_POLICY_PATH` correspond to `guardrails_toxicity_policy_path`, `guardrails_content_filter_policy_path`, and `guardrails_bias_patterns_policy_path` in `app/config.py` (Pydantic settings, typical env naming).
+
+### What happens if a path is set but the file is missing?
+
+`policy_loader` logs a **warning** and returns **`None`** for that policy; `build_guardrail_manager` then behaves as if no file were configured for that dimension (no crash on startup).
+
+### Where should operators put secrets or sensitive blocklists?
+
+Prefer **mounted files** or a gitignored directory such as `apps/api/config/guardrails/local/` (listed in `.gitignore`) so terms never land in the repo. The committed **`examples/`** folder carries only empty or illustrative placeholders.
+
+### How does this interact with `build_guardrail_manager` and saved pipeline guardrails?
+
+`GuardrailsConfigSchema` still controls **stage on/off** and per-check toggles. File policies only **parameterize** the registered `ToxicityFilterGuardrail`, `RetrievedContentFilterGuardrail`, and `RetrievalBiasHeuristicGuardrail` instances when paths resolve—orthogonal to disabling a whole stage via `enabled: false`.
+
+### What tests cover P4.5-7?
+
+`apps/api/tests/test_core/test_guardrails_policy_loader.py` — loader merge and invalid regex, missing file, env-driven manager blocking on a blocked term, `run_guarded_rag_query` INPUT block, and retrieval **WARN** when a bias regex from file matches the query.
+
+### How would you validate policies before rollout?
+
+Unit-test the JSON in CI, run **`pytest`** with fixture files, dry-run in staging with `LOG_LEVEL=DEBUG` and guardrail metrics from P4.5-6, and canary a small percentage of traffic while watching `rag_guardrail_*` series.
+
+---
+
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*

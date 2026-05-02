@@ -2227,6 +2227,214 @@ flowchart TB
   OUT --> R[Response]
 ```
 
+### Next sub-phase in Phase 4.5 (historical pointer)
+
+P4.5-6 · Monitoring & Metrics — **done** (see append **P4.5-6 · Monitoring & Metrics**). Next: **P4.5-7 · Configuration & Testing**.
+
+---
+
+## Phase 4.5 — P4.5-5 · RAG Pipeline Integration (append)
+
+**Intent:** One **end-to-end guarded path** from user query through retrieved chunks to LLM output, driven by optional **`guardrails`** on `PipelineConfigurationSchema`, plus **HTTP preview** for Designer and utilities (Autopilot-style callers).
+
+### Behaviour
+
+1. **`build_guardrail_manager(GuardrailsConfigSchema | None)`** registers INPUT / RETRIEVAL / OUTPUT rails according to stage `enabled` flags and per-check toggles (same kwargs as P4.5-2 … P4.5-4 `register_default_*` functions).
+2. **`run_guarded_rag_query`** runs `GuardrailOrchestrator` for INPUT and RETRIEVAL, then **`GenerationService.generate`**, then OUTPUT checks with **reference passages** in `GuardrailContext.extra` for hallucination / citation rules.
+3. **Preview APIs** accept `query`, full `config`, and **`contextDocuments`** (client-supplied retrieved chunks). Response returns **allow/block**, **stage summaries**, and **omits answer** when OUTPUT blocks.
+
+### Mermaid — guarded RAG request path (P4.5-5)
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant API as API (designer / utilities)
+  participant GR as GuardrailOrchestrator
+  participant GEN as GenerationService
+  C->>API: POST /rag-preview (query, config, contextDocuments)
+  API->>GR: check_input(query)
+  alt BLOCK
+    GR-->>API: input blocked
+    API-->>C: allowed=false
+  else continue
+    GR->>GR: check_retrieval(payload)
+    alt BLOCK
+      GR-->>API: retrieval blocked
+      API-->>C: allowed=false
+    else continue
+      API->>GEN: generate(query', docs')
+      GEN-->>API: answer
+      API->>GR: check_output(answer, refs from docs')
+      alt BLOCK
+        GR-->>API: output blocked
+        API-->>C: allowed=false (no answer text)
+      else ALLOW
+        API-->>C: allowed=true, answer, check summaries
+      end
+    end
+  end
+```
+
+### Mermaid — configuration vs runtime (Phase 4.5 progression)
+
+```mermaid
+flowchart TB
+  subgraph CFG [Saved pipeline JSON]
+    PC[PipelineConfigurationSchema]
+    G[guardrails optional]
+    PC --> G
+  end
+  subgraph RT [Per request]
+    M[build_guardrail_manager]
+    R[run_guarded_rag_query]
+    G -.->|defaults if null| M
+    M --> R
+  end
+```
+
+### Code map (concise)
+
+| Piece | Location |
+|-------|----------|
+| Optional `guardrails` on pipeline | `app/schemas/pipeline.py` |
+| Manager from policy | `app/core/guardrails/configure_manager.py` |
+| Guarded runner | `app/core/rag/guarded_runner.py` |
+| Shared preview service | `app/services/rag_preview_service.py` |
+| Routes | `app/routers/designer.py`, `app/routers/utilities.py` |
+| Frontend types | `apps/web/src/types/pipeline.ts` (`GuardrailsConfig`) |
+
+---
+
+## Phase 4.5 — P4.5-6 · Monitoring & Metrics (append)
+
+**Intent:** Make guardrail behavior **measurable** for SRE and product analytics: every check and stage run emits **Prometheus** counters/histograms; full guarded RAG runs emit a **coarse outcome** time series; operators scrape **`/metrics`** or call **`/monitoring/guardrails`** for a JSON snapshot.
+
+### Components
+
+| Piece | Role |
+|-------|------|
+| `app/core/guardrails/metrics.py` | Defines `rag_guardrail_*` instruments and `collect_guardrail_metric_samples()`. |
+| `GuardrailManager.run_stage` | Records per-check + per-stage-result samples after each `check()` and on stage exit. |
+| `run_guarded_rag_query` | Records `success` / `blocked_*` pipeline outcomes. |
+| `app/routers/monitoring.py` | `GET /metrics` (Prometheus text), `GET /monitoring/guardrails` (JSON). |
+| `Settings.prometheus_metrics_enabled` | When `false`, both routes return **404**. |
+
+### Mermaid — metrics flow (P4.5-6)
+
+```mermaid
+flowchart LR
+  subgraph GR [Guardrail execution]
+    M[GuardrailManager.run_stage]
+    R[run_guarded_rag_query]
+  end
+  subgraph OBS [Observability]
+    P[Prometheus counters / histograms]
+    S[GET /metrics scrape]
+    J[GET /monitoring/guardrails JSON]
+  end
+  M --> P
+  R --> P
+  P --> S
+  P --> J
+```
+
+### Mermaid — guarded RAG with telemetry (conceptual)
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant API as FastAPI
+  participant GR as Guardrails + Manager
+  participant M as Prometheus registry
+  C->>API: RAG preview / internal call
+  API->>GR: run stages + optional generate
+  GR->>M: increment checks, stage_results, rag_runs
+  API-->>C: allow/block + payload
+  Note over M: Scraper reads GET /metrics
+```
+
+### Evolution note
+
+Phase 4.5 now has **policy** (P4.5-2 … P4.5-4), **integration** (P4.5-5), and **telemetry** (P4.5-6). Phase 11 can unify these series with HTTP and infrastructure metrics in Grafana without changing guardrail semantics.
+
 ### Next sub-phase in Phase 4.5
 
-P4.5-5 · RAG Pipeline Integration — wire guardrails into Generation Service and Designer/Autopilot APIs.
+P4.5-7 · Configuration & Testing — config files, comprehensive tests, and documentation pass.
+
+---
+
+## Phase 4.5 — P4.5-7 · Configuration & Testing (append)
+
+**Intent:** Let operators **extend** toxicity, retrieval content-filter, and bias heuristics via **JSON policy files** on disk (separate from saved pipeline JSON), with **pytest** coverage and **documented** env vars. Keeps default behavior safe (self-test markers only) until paths are set.
+
+### Behaviour
+
+1. **`Settings`** exposes optional paths: `guardrails_toxicity_policy_path`, `guardrails_content_filter_policy_path`, `guardrails_bias_patterns_policy_path` (empty = unchanged defaults).
+2. **`policy_loader`** reads JSON (`blocked_terms`, `regex_patterns` for toxicity/content filter; `regex_patterns` only for bias), compiles regexes (invalid pattern → `ValueError`), and **merges** file patterns with built-in default patterns so self-test markers remain available.
+3. **`build_guardrail_manager`** loads policies via `get_settings()` and passes merged terms/patterns into `register_default_input_guardrails` / `register_default_retrieval_guardrails`.
+4. **Examples** live under `apps/api/config/guardrails/examples/`; operator-specific overrides can live in `apps/api/config/guardrails/local/` (gitignored).
+
+### Mermaid — operator policy files + manager build (P4.5-7)
+
+```mermaid
+flowchart LR
+  subgraph ENV [Environment]
+    P1[GUARDRAILS_TOXICITY_POLICY_PATH]
+    P2[GUARDRAILS_CONTENT_FILTER_POLICY_PATH]
+    P3[GUARDRAILS_BIAS_PATTERNS_POLICY_PATH]
+  end
+  subgraph FS [Filesystem JSON]
+    J1[toxicity.json]
+    J2[content_filter.json]
+    J3[bias_patterns.json]
+  end
+  subgraph APP [API process]
+    S[Settings]
+    L[policy_loader]
+    B[build_guardrail_manager]
+    M[GuardrailManager]
+  end
+  P1 --> S
+  P2 --> S
+  P3 --> S
+  S --> L
+  J1 --> L
+  J2 --> L
+  J3 --> L
+  L --> B
+  B --> M
+```
+
+### Mermaid — configuration layers (Phase 4.5 complete)
+
+```mermaid
+flowchart TB
+  subgraph P [Per-request pipeline JSON]
+    G[guardrails toggles]
+  end
+  subgraph O [Operator filesystem policies — P4.5-7]
+    F[JSON term + regex lists]
+  end
+  subgraph R [Runtime]
+    M[build_guardrail_manager]
+    GR[Guarded RAG + metrics P4.5-6]
+  end
+  G --> M
+  F --> M
+  M --> GR
+```
+
+### Code map (concise)
+
+| Piece | Location |
+|-------|----------|
+| Settings fields | `app/config.py` |
+| Load + merge | `app/core/guardrails/policy_loader.py` |
+| Wire into manager | `app/core/guardrails/configure_manager.py` |
+| Default pattern exports | `input/toxicity.py`, `retrieval/content_filter.py`, `retrieval/bias.py` |
+| Example JSON | `apps/api/config/guardrails/examples/` |
+| Tests | `apps/api/tests/test_core/test_guardrails_policy_loader.py` |
+
+### Evolution note
+
+Phase **4.5** is **complete**: policy implementations, RAG integration, Prometheus metrics, and **operator-configurable** lists/patterns without redeploying pipeline documents.
