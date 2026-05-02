@@ -1894,3 +1894,70 @@ Later phases add Designer UX depth (Phase 5), LangGraph autopilot agents + strea
 - **Phase 12:** Replace header user with JWT and tighten row-level security.
 
 *Append new sections at the end of this file when milestones land; preserve the full P0–P2 archive and later milestones above.*
+
+---
+
+## Phase 4 — P4-3 Cost Calculation API (Designer)
+
+**Scope:** Stateless cost estimation for a validated `PipelineConfigurationSchema`. No Postgres read/write; pricing data is file-backed (`apps/api/catalogs/pricing.json` with fallback to repo `data/pricing.json`). This sub-phase adds the **estimation plane** next to existing **config persistence** (P4-2) and **projects** (P4-1).
+
+### Architecture (level: Designer API + pricing catalog)
+
+```mermaid
+flowchart LR
+  subgraph client [Client]
+    FE[Designer UI / tools]
+  end
+  subgraph api [FastAPI]
+    DC["POST /api/designer/cost"]
+    CS[CostService]
+    CE[CostEstimator]
+  end
+  subgraph data [Data]
+    PJ[pricing.json]
+  end
+  FE -->|CostRequest JSON| DC
+  DC --> CS
+  CS --> CE
+  CE --> PJ
+  DC -->|CostEstimateSchema| FE
+```
+
+### Behaviour
+
+| Input | Source |
+|--------|--------|
+| Pipeline stages | `CostRequest.config` — chunking, embedding model/dims, vector store provider, retrieval (strategy, `top_k`, multi-query config), reranking, generation |
+| Volume assumptions | `queries_per_month`, `documents_count`, `avg_document_tokens` |
+| Defaults | `pricing.json` → `assumptions` (avg input/output tokens per query) |
+
+| Output | Meaning |
+|--------|---------|
+| `per_query` | Variable USD/query (embedding + generation + rerank + amortized retrieval reads) |
+| `per_month` | Same components × scale + monthly vector storage |
+| `breakdown` | Five rows: `embedding`, `vector_storage`, `retrieval_ops`, `reranking`, `generation` with percentages |
+
+### Relation to utilities
+
+`POST /api/utilities/cost` uses the same `CostEstimator` (via `app.core.utilities.cost` re-export). Designer-specific route is **`/api/designer/cost`** for product and OpenAPI grouping under `designer`.
+
+### Next sub-phases in Phase 4
+
+Export API, templates API — can call cost estimator for previews; no schema change required.
+
+```mermaid
+flowchart TB
+  subgraph p4 [Phase 4 Designer backend]
+    P1[Projects API]
+    P2[Config API]
+    P3[Cost API]
+    P4[Export API]
+    P5[Templates API]
+  end
+  P1 --> DB[(Postgres)]
+  P2 --> DB
+  P3 --> CAT[pricing.json]
+  P4 --> DB
+  P5 --> DB
+  P5 --> TJ[templates.json]
+```

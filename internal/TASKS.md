@@ -516,21 +516,21 @@ Create `apps/api/app/routers/designer.py` and `apps/api/app/services/designer_se
 
 ---
 
-### P4-3 · Cost Calculation API
+### ✅ P4-3 · Cost Calculation API
 **Branch:** `feature/p4-cost-api`
 
 > **Depends on:** P2-9, P1-1 merged
 
-- [ ] `POST /api/designer/cost` — accepts `PipelineConfigurationSchema`, returns `CostEstimateSchema`
-- [ ] `apps/api/app/utils/cost_calculator.py` — full implementation:
+- [x] `POST /api/designer/cost` — accepts `PipelineConfigurationSchema`, returns `CostEstimateSchema`
+- [x] `apps/api/app/utils/cost_calculator.py` — full implementation:
   - Embedding cost: `tokens * price_per_token[model]`
   - Vector storage cost: `vectors * dims * storage_price[provider]`
   - Retrieval cost: `queries * retrieval_price[provider]`
   - Reranking cost: `queries * top_k * rerank_price[model]` (if enabled)
   - Generation cost: `(input_tokens + output_tokens) * price[model]`
   - Returns per-query and per-month estimates + breakdown array
-- [ ] `CostService` class wrapping the calculator
-- [ ] Unit tests with known pricing fixtures
+- [x] `CostService` class wrapping the calculator
+- [x] Unit tests with known pricing fixtures
 
 ---
 

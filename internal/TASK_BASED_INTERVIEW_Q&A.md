@@ -3387,4 +3387,52 @@ Typed as **`uuid.UUID`** (JSON property `projectId`) instead of `str` for strict
 
 ---
 
+## Phase 4 · P4-3 — Cost Calculation API
+
+### What endpoint estimates Designer pipeline cost?
+
+`POST /api/designer/cost` with body `CostRequest`: `config` (`PipelineConfigurationSchema`), optional `queries_per_month` (default 100_000), `documents_count`, `avg_document_tokens`. Response: `CostEstimateSchema` (`embedding`, `storage`, `retrieval`, `reranking`, `generation`, `total`, `per_query`, `per_month`, `currency`, `breakdown`).
+
+### How does that differ from `POST /api/utilities/cost`?
+
+Same request shape and pricing math; **utilities** is a cross-cutting preview, **designer** is the product endpoint for Designer mode (P5 cost UI will call `/api/designer/cost`). Both read the same `pricing.json`.
+
+### Where is the calculator implemented?
+
+`apps/api/app/utils/cost_calculator.py`: `CostEstimator.estimate(CostRequest)`, `calculate_cost`, `load_pricing`, `estimate_pipeline_cost`. Legacy import path `app.core.utilities.cost` re-exports the same symbols for P2-9 callers.
+
+### What does `CostService` do?
+
+Thin wrapper in `apps/api/app/services/cost_service.py`: loads pricing via settings, runs `CostEstimator`. Used by the designer router; no database access.
+
+### How is embedding cost estimated?
+
+Approximate tokens for the retrieval path: `top_k × chunk_size` (tokens) × embedding `$ / 1M tokens` from `pricing.json` → per query; multiplied by `queries_per_month` for monthly embedding line. **Multi-query** strategy multiplies this (and retrieval ops) by `num_variants`; **ensemble** / **hybrid** apply small multipliers.
+
+### How is vector storage cost estimated?
+
+Corpus size: `documents_count × avg_document_tokens / chunk_size` ≈ chunk count; bytes ≈ `chunks × dimensions × 4` (float32); GB × provider `costPerGBPerMonth` (managed tiers may enforce a monthly minimum).
+
+### How is retrieval (provider ops) cost estimated?
+
+For Pinecone serverless: `queries_per_month × costPerReadUnit`. For Vertex AI Vector Search managed: `(queries_per_month / 1e6) × queryUnitCostPer1M`. Self-hosted Qdrant default storage tier may be $0 for listed `costPerGBPerMonth` in self-hosted block.
+
+### How is reranking cost estimated?
+
+From `reranking.models[model_id].costPer1KQueries`: **per-query** = `costPer1KQueries / 1000` (USD). Matches hosted APIs that bill per search call.
+
+### How is generation cost estimated?
+
+Input tokens ≈ retrieved context (`top_k × chunk_size`) + assumed prompt tokens from `assumptions.avgInputTokensPerQuery`. Output tokens = `min(assumptions.avgOutputTokensPerQuery, generation.max_tokens)`. Prices: `inputCostPer1MTokens` and `outputCostPer1MTokens` per model in `pricing.json`.
+
+### What HTTP status if pricing file is missing?
+
+`503` with detail from `PricingLoadError` (same as utilities cost).
+
+### What tests exist?
+
+`tests/test_utils/test_cost_calculator.py`: deterministic mini `pricing` dict asserts `per_query` / `breakdown` labels; Cohere rerank monthly total. `tests/test_designer.py::test_designer_cost_endpoint` integration test on live catalog.
+
+---
+
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*
