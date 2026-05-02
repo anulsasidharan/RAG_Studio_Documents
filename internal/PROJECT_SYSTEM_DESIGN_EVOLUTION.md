@@ -1830,16 +1830,19 @@ Designer persists **`PipelineConfigurationSchema`** in `pipeline_configs.config`
 ```mermaid
 flowchart TB
   subgraph clients [Clients]
-    FE[Next.js]
+    FE["Next.js"]
   end
-  subgraph apps_api [apps/api]
-    PR[/api/projects/]
-    DS[/api/designer/config…]
-    PS[ProjectService]
-    DG[DesignerService]
-    HC[Health / utilities / jobs…]
+
+  subgraph apps_api ["apps/api"]
+    PR["/api/projects/"]
+    DS["/api/designer/config"]
+    PS["ProjectService"]
+    DG["DesignerService"]
+    HC["Health / utilities / jobs"]
   end
+
   DB[(Postgres)]
+
   FE --> PR
   FE --> DS
   PR --> PS
