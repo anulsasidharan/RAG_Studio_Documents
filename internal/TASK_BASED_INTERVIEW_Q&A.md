@@ -3435,4 +3435,39 @@ Input tokens ≈ retrieved context (`top_k × chunk_size`) + assumed prompt toke
 
 ---
 
+## Phase 4 · P4-4 — Export API
+
+### What endpoint exports a pipeline to code or infra artefacts?
+
+`POST /api/designer/export` with body `ExportRequest`: `config` (`PipelineConfigurationSchema`), `format` one of `python` | `yaml` | `terraform` | `docker-compose` | `k8s`. Response: `ExportResponse` with `code` (full file text), `filename`, `format`, `contentType` (camelCase in JSON).
+
+### Is export stateless?
+
+Yes. No database session or `X-User-ID`; same pattern as `POST /api/designer/cost`. Validation is entirely on `PipelineConfigurationSchema`.
+
+### What does `ExportService` do?
+
+`apps/api/app/services/export_service.py` dispatches by format, returns `ExportResponse` with MIME `content_type` and a slugified filename (`docker-compose.yml` for compose; `*-main.tf` for Terraform; `*-k8s-manifests.yaml` for Kubernetes).
+
+### Where is LangChain Python code generated?
+
+`app/services/export_generators/python_export.py` — LCEL RAG script (embeddings, LLM, vector store, retriever, optional rerank/memory), aligned with `apps/web/src/lib/generators/pythonCodeGenerator.ts`.
+
+### Where are YAML, Terraform, Docker, and K8s generated?
+
+- YAML: `yaml_export.py` — human-readable pipeline YAML (mirrors `yamlGenerator.ts`).
+- Terraform: `terraform_export.py` — AWS/GCP/Azure scaffolds (mirrors `terraformGenerator.ts`); `multi-cloud` maps to AWS.
+- Docker Compose: `docker_k8s_export.py` — API + Postgres + Redis + Qdrant with env wiring.
+- Kubernetes: `docker_k8s_export.py` — Namespace, ConfigMap, Qdrant + API Deployments/Services.
+
+### Why is there an `_compat.ev()` helper?
+
+`RAGBaseModel` uses `use_enum_values=True`; validated models may hold plain strings instead of StrEnum instances. `ev()` normalises to string for comparisons and string templates.
+
+### What tests cover export?
+
+`tests/test_export.py`: parametrized check for all five formats; assertions on Python LCEL/Terraform provider/Docker services/K8s multi-doc YAML.
+
+---
+
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*

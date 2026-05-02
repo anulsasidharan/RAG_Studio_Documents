@@ -1961,3 +1961,58 @@ flowchart TB
   P5 --> DB
   P5 --> TJ[templates.json]
 ```
+
+---
+
+## Phase 4 — P4-4 Export API (Designer)
+
+**Scope:** Stateless code and manifest generation from a validated `PipelineConfigurationSchema`. Mirrors the P3-5 frontend generators so the Designer UI (P5-12) can call the API instead of generating only client-side. No Postgres; no pricing file.
+
+### Architecture (export plane)
+
+```mermaid
+flowchart LR
+  subgraph client [Client]
+    FE[Designer UI / scripts]
+  end
+  subgraph api [FastAPI]
+    EX["POST /api/designer/export"]
+    ES[ExportService]
+    G1[python_export]
+    G2[yaml_export]
+    G3[terraform_export]
+    G4[docker_k8s_export]
+  end
+  FE -->|ExportRequest JSON| EX
+  EX --> ES
+  ES --> G1
+  ES --> G2
+  ES --> G3
+  ES --> G4
+  ES -->|ExportResponse| FE
+```
+
+### Phase 4 Designer backend (updated)
+
+```mermaid
+flowchart TB
+  subgraph p4 [Phase 4 Designer backend]
+    P1[Projects API]
+    P2[Config API]
+    P3[Cost API]
+    P4[Export API]
+    P5[Templates API]
+  end
+  P1 --> DB[(Postgres)]
+  P2 --> DB
+  P3 --> CAT[pricing.json]
+  P4 -.->|stateless| GEN[Text generators]
+  P5 --> DB
+  P5 --> TJ[templates.json]
+```
+
+**Note:** The earlier diagram showed Export → DB; export is **stateless** — generators only. Templates API remains DB-backed.
+
+### Next sub-phase in Phase 4
+
+Templates API — list/apply `data/templates.json` and create `PipelineConfig` rows.

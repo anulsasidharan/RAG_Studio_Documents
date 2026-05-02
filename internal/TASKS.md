@@ -534,22 +534,22 @@ Create `apps/api/app/routers/designer.py` and `apps/api/app/services/designer_se
 
 ---
 
-### P4-4 · Export API
+### ✅ P4-4 · Export API
 **Branch:** `feature/p4-export-api`
 
 > **Depends on:** P4-2, P3-5 merged (generators can be ported or called from frontend)
 
 Create `apps/api/app/routers/designer.py` export endpoint and `apps/api/app/services/export_service.py`:
 
-- [ ] `POST /api/designer/export` — accepts config + format (`python` | `yaml` | `terraform` | `docker-compose` | `k8s`)
-- [ ] `ExportService`:
+- [x] `POST /api/designer/export` — accepts config + format (`python` | `yaml` | `terraform` | `docker-compose` | `k8s`)
+- [x] `ExportService`:
   - `to_python(config) -> str` — LangChain LCEL pipeline code
   - `to_yaml(config) -> str` — configuration YAML
   - `to_terraform(config) -> str` — cloud infra (AWS/GCP/Azure)
   - `to_docker_compose(config) -> str`
   - `to_kubernetes(config) -> str`
-- [ ] Returns file content + suggested filename
-- [ ] Integration tests for each format
+- [x] Returns file content + suggested filename
+- [x] Integration tests for each format
 
 ---
 
