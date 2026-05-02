@@ -203,6 +203,7 @@ pytest tests/test_integration/ -v
 - Docker ≥ 24 + Docker Compose ≥ 2.20
 - Node.js ≥ 18 + npm ≥ 9
 - Python ≥ 3.11
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
 
 ### Frontend
 
@@ -216,9 +217,9 @@ npm run dev   # → http://localhost:3000
 
 ```bash
 cd apps/api
-python -m venv .venv
+uv venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt -r requirements-dev.txt
+uv pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload   # → http://localhost:8000
 ```
 

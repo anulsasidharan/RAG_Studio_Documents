@@ -190,6 +190,7 @@ Animations: Framer Motion 11+
 ```yaml
 Framework: FastAPI 0.110+
 Language: Python 3.11+
+Package Manager: uv
 Agent Framework: LangGraph 0.2+
 LLM Integration: LangChain 0.1+
 Async Runtime: Asyncio + Uvicorn

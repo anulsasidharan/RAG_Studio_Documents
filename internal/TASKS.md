@@ -426,52 +426,54 @@ Add all required shadcn/ui components:
 
 ---
 
-### P3-3 · App Layout & Navigation
+### P3-3 · App Layout & Navigation ✅
 **Branch:** `feature/p3-app-layout`
 
 > **Depends on:** P3-1, P3-2 merged
 
-- [ ] `apps/web/src/app/layout.tsx` — root layout with `<html>`, `<body>`, QueryClientProvider, font (Geist)
-- [ ] `apps/web/src/app/globals.css` — Tailwind base + CSS variable definitions
-- [ ] `apps/web/src/components/shared/` nav components:
+- [x] `apps/web/src/app/layout.tsx` — root layout with `<html>`, `<body>`, `QueryClientProvider` (`providers.tsx`), Inter + JetBrains Mono with `--font-geist-sans` / `--font-geist-mono` (Geist-style stack; matches Tailwind `font-sans` / `font-mono`)
+- [x] `apps/web/src/app/globals.css` — Tailwind base + CSS variable definitions
+- [x] `apps/web/src/components/providers.tsx` — React Query client provider
+- [x] `apps/web/src/components/shared/app-shell.tsx` — shell with optional sidebar (hidden on home)
+- [x] `apps/web/src/components/shared/` nav components:
   - `Navbar.tsx` — logo, mode switcher (Designer / Autopilot), project dropdown, user avatar
   - `Sidebar.tsx` — collapsible sidebar for project management
   - `ModeToggle.tsx` — pill toggle between Designer and Autopilot
-- [ ] `apps/web/src/app/not-found.tsx` — custom 404 page
-- [ ] `apps/web/src/app/error.tsx` — global error boundary
+- [x] `apps/web/src/app/not-found.tsx` — custom 404 page
+- [x] `apps/web/src/app/error.tsx` — global error boundary
 
 ---
 
-### P3-4 · Landing Page
+### ✅ P3-4 · Landing Page
 **Branch:** `feature/p3-landing-page`
 
 > **Depends on:** P3-3 merged
 
 Create `apps/web/src/app/page.tsx` and landing components in `apps/web/src/components/landing/`:
 
-- [ ] `Hero.tsx` — headline, sub-headline, two CTA buttons (Designer / Autopilot), animated gradient background
-- [ ] `ModeComparison.tsx` — side-by-side cards: Designer mode vs Autopilot mode features
-- [ ] `HowItWorks.tsx` — numbered steps for each mode
-- [ ] `Features.tsx` — feature grid (6 key features with icons)
-- [ ] `UseCases.tsx` — persona cards: Learning Engineer, Time-Strapped Startup, Enterprise Architect
-- [ ] `Pricing.tsx` — Free / Pro / Enterprise tier cards
-- [ ] `CTA.tsx` — bottom call-to-action
-- [ ] `apps/web/src/app/page.tsx` — assembles all landing sections
+- [x] `Hero.tsx` — headline, sub-headline, two CTA buttons (Designer / Autopilot), animated gradient background
+- [x] `ModeComparison.tsx` — side-by-side cards: Designer mode vs Autopilot mode features
+- [x] `HowItWorks.tsx` — numbered steps for each mode
+- [x] `Features.tsx` — feature grid (6 key features with icons)
+- [x] `UseCases.tsx` — persona cards: Learning Engineer, Time-Strapped Startup, Enterprise Architect
+- [x] `Pricing.tsx` — Free / Pro / Enterprise tier cards
+- [x] `CTA.tsx` — bottom call-to-action
+- [x] `apps/web/src/app/page.tsx` — assembles all landing sections
 
 ---
 
-### P3-5 · Lib Utilities & Validators
+### ✅ P3-5 · Lib Utilities & Validators
 **Branch:** `feature/p3-lib-utilities`
 
 > **Depends on:** P1-1, P1-2 merged
 
-- [ ] `apps/web/src/lib/validators.ts` — Zod schemas matching TypeScript types (PipelineConfiguration, BuildRequirements)
-- [ ] `apps/web/src/lib/constants.ts` — stage route map, default configs, magic numbers
-- [ ] `apps/web/src/lib/generators/mermaidGenerator.ts` — `generateMermaidDiagram(stages, cloudProvider) -> string`
-- [ ] `apps/web/src/lib/generators/pythonCodeGenerator.ts` — `generatePythonCode(config) -> string` (LangChain LCEL)
-- [ ] `apps/web/src/lib/generators/yamlGenerator.ts` — `generateYAML(config) -> string`
-- [ ] `apps/web/src/lib/generators/terraformGenerator.ts` — `generateTerraform(config, cloudProvider) -> string`
-- [ ] Unit tests for all generators with snapshot testing
+- [x] `apps/web/src/lib/validators.ts` — Zod schemas matching TypeScript types (PipelineConfiguration, BuildRequirements)
+- [x] `apps/web/src/lib/constants.ts` — stage route map, default configs, magic numbers
+- [x] `apps/web/src/lib/generators/mermaidGenerator.ts` — `generateMermaidDiagram(stages, cloudProvider) -> string`
+- [x] `apps/web/src/lib/generators/pythonCodeGenerator.ts` — `generatePythonCode(config) -> string` (LangChain LCEL)
+- [x] `apps/web/src/lib/generators/yamlGenerator.ts` — `generateYAML(config) -> string`
+- [x] `apps/web/src/lib/generators/terraformGenerator.ts` — `generateTerraform(config, cloudProvider) -> string`
+- [x] Unit tests for all generators with snapshot testing (113 tests, 7 snapshots — Vitest)
 
 ---
 

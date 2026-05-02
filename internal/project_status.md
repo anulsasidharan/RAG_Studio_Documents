@@ -24,11 +24,11 @@
 | 17 | Phase 2 | P2-8 · Celery Worker & Task Queue | `feature/p2-celery-worker` | Add async task processing for build, evaluation, and deployment jobs. | ✅ done |
 | 18 | Phase 2 | P2-9 · Health & Utility Endpoints | `feature/p2-health-endpoints` | Add health checks, logging, validators, helpers, and cost utility wiring. | ✅ done |
 |  | `Phase 3` | `Build the frontend foundation: UI system, app shell, state stores, and landing experience.` |  |  |  |
-| 19 | Phase 3 | P3-1 · shadcn/ui Component Library Setup | `feature/p3-shadcn-components` | Install and configure shared UI component system and design tokens. | ⬜ pending |
-| 20 | Phase 3 | P3-2 · Zustand State Stores | `feature/p3-zustand-stores` | Create persistent frontend stores for designer, autopilot, and projects. | ⬜ pending |
-| 21 | Phase 3 | P3-3 · App Layout & Navigation | `feature/p3-app-layout` | Build global app layout, navbar/sidebar, and error/not-found pages. | ⬜ pending |
-| 22 | Phase 3 | P3-4 · Landing Page | `feature/p3-landing-page` | Implement marketing/entry landing experience and key sections. | ⬜ pending |
-| 23 | Phase 3 | P3-5 · Lib Utilities & Validators | `feature/p3-lib-utilities` | Build validators, constants, and code/diagram generation utilities. | ⬜ pending |
+| 19 | Phase 3 | P3-1 · shadcn/ui Component Library Setup | `feature/p3-shadcn-components` | Install and configure shared UI component system and design tokens. | ✅ done |
+| 20 | Phase 3 | P3-2 · Zustand State Stores | `feature/p3-zustand-stores` | Create persistent frontend stores for designer, autopilot, and projects. | ✅ done |
+| 21 | Phase 3 | P3-3 · App Layout & Navigation | `feature/p3-app-layout` | Build global app layout, navbar/sidebar, and error/not-found pages. | ✅ done |
+| 22 | Phase 3 | P3-4 · Landing Page | `feature/p3-landing-page` | Implement marketing/entry landing experience and key sections. | ✅ done |
+| 23 | Phase 3 | P3-5 · Lib Utilities & Validators | `feature/p3-lib-utilities` | Build validators, constants, and code/diagram generation utilities. | ✅ done |
 |  | `Phase 4` | `Deliver backend APIs required to support all Designer mode workflows.` |  |  |  |
 | 24 | Phase 4 | P4-1 · Projects API | `feature/p4-projects-api` | Implement backend CRUD APIs/services for project management. | ⬜ pending |
 | 25 | Phase 4 | P4-2 · Designer Config API | `feature/p4-designer-config-api` | Implement save/load/update/delete APIs for pipeline configurations. | ⬜ pending |
