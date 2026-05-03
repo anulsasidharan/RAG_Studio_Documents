@@ -49,17 +49,17 @@
 | 38 | Phase 5 | P5-3 · Data Ingestion Configuration | `feature/p5-ingestion-config` | Build ingestion source/file/preprocessing/metadata configuration UI. | ✅ done |
 | 39 | Phase 5 | P5-4 · Chunking Configuration | `feature/p5-chunking-config` | Build chunking strategy and parameter configuration UI. | ✅ done |
 | 40 | Phase 5 | P5-5 · Embedding Model Selector | `feature/p5-embedding-selector` | Build embedding model discovery/filter/selection UI. | ✅ done |
-| 41 | Phase 5 | P5-6 · Vector Store Selector | `feature/p5-vectorstore-selector` | Build vector store selection and provider-specific config UI. | ⬜ pending |
-| 42 | Phase 5 | P5-7 · Retrieval Configuration | `feature/p5-retrieval-config` | Build retrieval strategy, top-k, filters, and reranking UI. | ⬜ pending |
-| 43 | Phase 5 | P5-8 · Generation Model Selector | `feature/p5-generation-selector` | Build generation model and inference parameter selection UI. | ⬜ pending |
-| 44 | Phase 5 | P5-9 · Routing, Memory & Evaluation Config | `feature/p5-routing-memory-eval` | Build routing logic, memory settings, and evaluation options UI. | ⬜ pending |
-| 45 | Phase 5 | P5-10 · Pipeline Visualizer | `feature/p5-pipeline-visualizer` | Render live pipeline graph/summary from current configuration. | ⬜ pending |
-| 46 | Phase 5 | P5-11 · Cost Estimator Component | `feature/p5-cost-estimator` | Show live cost estimates with detailed component breakdowns. | ⬜ pending |
-| 47 | Phase 5 | P5-12 · Code Export Component | `feature/p5-code-exporter` | Build frontend export viewer with copy/download/deploy actions. | ⬜ pending |
-| 48 | Phase 5 | P5-13 · Designer Review Page | `feature/p5-designer-review` | Build final review page with visualizer, cost, export, and actions. | ⬜ pending |
-| 49 | Phase 5 | P5-14 · Template Gallery Page | `feature/p5-template-gallery` | Build template gallery and template-apply user flow. | ⬜ pending |
+| 41 | Phase 5 | P5-6 · Vector Store Selector | `feature/p5-vectorstore-selector` | Build vector store selection and provider-specific config UI. | ✅ done |
+| 42 | Phase 5 | P5-7 · Retrieval Configuration | `feature/p5-retrieval-config` | Build retrieval strategy, top-k, filters, and reranking UI. | ✅ done |
+| 43 | Phase 5 | P5-8 · Generation Model Selector | `feature/p5-generation-selector` | Build generation model and inference parameter selection UI. | ✅ done |
+| 44 | Phase 5 | P5-9 · Routing, Memory & Evaluation Config | `feature/p5-routing-memory-eval` | Build routing logic, memory settings, and evaluation options UI. | ✅ done |
+| 45 | Phase 5 | P5-10 · Pipeline Visualizer | `feature/p5-pipeline-visualizer` | Render live pipeline graph/summary from current configuration. | ✅ done |
+| 46 | Phase 5 | P5-11 · Cost Estimator Component | `feature/p5-cost-estimator` | Show live cost estimates with detailed component breakdowns. | ✅ done |
+| 47 | Phase 5 | P5-12 · Code Export Component | `feature/p5-code-exporter` | Build frontend export viewer with copy/download/deploy actions. | ✅ done |
+| 48 | Phase 5 | P5-13 · Designer Review Page | `feature/p5-designer-review` | Build final review page with visualizer, cost, export, and actions. | ✅ done |
+| 49 | Phase 5 | P5-14 · Template Gallery Page | `feature/p5-template-gallery` | Build template gallery and template-apply user flow. | ✅ done |
 |  | `Phase 6` | `Build LangGraph-based Autopilot backend agents to autonomously optimize RAG pipelines.` |  |  |  |
-| 50 | Phase 6 | P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | Set up shared agent state, tools, prompts, and LangGraph foundation. | ⬜ pending |
+| 50 | Phase 6 | P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | Set up shared agent state, tools, prompts, and LangGraph foundation. | ✅ done |
 | 51 | Phase 6 | P6-2 · Document Analyst Agent | `feature/p6-document-analyst-agent` | Build agent that analyzes document corpus and recommends chunking. | ⬜ pending |
 | 52 | Phase 6 | P6-3 · Chunking Optimizer Agent | `feature/p6-chunking-optimizer-agent` | Build agent to test chunking options and select best configuration. | ⬜ pending |
 | 53 | Phase 6 | P6-4 · Embedding Tester Agent | `feature/p6-embedding-tester-agent` | Build agent to benchmark embeddings by quality/speed/cost goals. | ⬜ pending |

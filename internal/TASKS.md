@@ -24,3 +24,18 @@
 | P5-3 · Data Ingestion Configuration | `feature/p5-ingestion-config` | ✅ done |
 | P5-4 · Chunking Configuration | `feature/p5-chunking-config` | ✅ done |
 | P5-5 · Embedding Model Selector | `feature/p5-embedding-selector` | ✅ done |
+| P5-6 · Vector Store Selector | `feature/p5-vectorstore-selector` | ✅ done |
+| P5-7 · Retrieval Configuration | `feature/p5-retrieval-config` | ✅ done |
+| P5-8 · Generation Model Selector | `feature/p5-generation-selector` | ✅ done |
+| P5-9 · Routing, Memory & Evaluation Config | `feature/p5-routing-memory-eval` | ✅ done |
+| P5-10 · Pipeline Visualizer | `feature/p5-pipeline-visualizer` | ✅ done |
+| P5-11 · Cost Estimator Component | `feature/p5-cost-estimator` | ✅ done |
+| P5-12 · Code Export Component | `feature/p5-code-exporter` | ✅ done |
+| P5-13 · Designer Review Page | `feature/p5-designer-review` | ✅ done |
+| P5-14 · Template Gallery Page | `feature/p5-template-gallery` | ✅ done |
+
+## Phase 6 — Autopilot (LangGraph)
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | ✅ done |

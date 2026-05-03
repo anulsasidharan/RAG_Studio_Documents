@@ -4091,6 +4091,561 @@ Model grid uses **`role="radiogroup"`** / **`role="radio"`** / **`aria-checked`*
 
 Stages **vector store** through **review** still use dashed placeholders until **P5-6+**. **Cloud**, **ingestion**, **chunking**, and **embedding** are interactive.
 
+### What if filters hide the model that is already selected?
+
+**`EmbeddingConfigurator`** computes **`displayModels`**: if **`getEmbeddingModelMeta(cfg.model)`** is missing from **`filteredModels`**, that catalog row is **prepended** so the radiogroup always lists the active choice. **`pinnedSelectionId`** drives a **“Current · outside filters”** badge and helper copy under the filter summary so users know why an extra card appears and how it relates to **`draft.stages.embedding`**.
+
+### Why not allow arbitrary model strings in the UI?
+
+Free-text **`model`** ids would drift from **`embeddings.json`** and break **`embeddingConfigFromCatalogEntry`** mapping (**provider** / **dimensions** / **maxTokens**). Catalog-backed cards keep the draft aligned with **Phase 2 `EmbeddingService`** expectations and with **vector index dimensionality** (provision indexes with **`cfg.dimensions`**).
+
+### How does the Embedding stage relate to the Python export generator?
+
+**`pythonCodeGenerator`** picks **`langchain_*`** imports from **`draft.stages.embedding.provider`** (see **`EMBEDDING_IMPORTS`** / **`EMBEDDING_CLASS`** in **`apps/web/src/lib/generators/pythonCodeGenerator.ts`**). Selecting a catalog model therefore shapes generated code; **`batchSize`** is the main extra tunable in the UI beyond the catalog row.
+
+### How do you add a new embedding model to the product?
+
+1. Add a row to **`data/models/embeddings.json`** with **id**, **provider** (must be a known **`EmbeddingProvider`**), **dimensions**, **maxTokens**, and metadata used by filters. 2. Rebuild the web app so the JSON import is bundled. 3. Optional: extend **`apps/web/src/lib/__tests__/embeddings-catalog.test.ts`** expected model count. Backend **P2-3** must support the **provider** if you expect live embedding.
+
+---
+
+## Phase 5 · P5-6 · Vector Store Selector
+
+### What problem does the Vector Store stage solve in Designer mode?
+
+Users must pick **where vectors are stored and queried**: **provider** (Qdrant, Pinecone, Weaviate, etc.), an **index/collection name**, **similarity metric**, scaling hints (**replicas**, **shards**), optional **namespace**, and optional **non-secret cloud placement**. **P5-6** surfaces **`data/vector-stores.json`** with search and filters so **`draft.stages.vectorStore`** validates against **`VectorStoreConfigSchema`** (Zod) and matches **`VectorStoreConfig`** in **`pipeline.ts`**.
+
+### Where does vector store catalog metadata come from?
+
+**`data/vector-stores.json`** is imported at build time via **`apps/web/src/lib/vector-stores-catalog.ts`**. Entries describe **type** (managed / self-hosted / embedded), **cloudNative** flags (AWS, GCP, Azure, self-managed), **features** (e.g. **hybridSearch**), **bestFor**, **pros/cons**, and **supportedMetrics** strings.
+
+### How does selecting a store update the draft?
+
+**`vectorStorePatchFromCatalog(storeId, current)`** sets **`provider`** and aligns **`configuration.metric`** with metrics that are valid for **both** the catalog row **and** **`SimilarityMetric`** (**cosine**, **euclidean**, **dot**). Other **`configuration`** fields (**indexName**, **replicas**, **shards**, **namespace**, **cloud**) are merged by **`mergeVectorStore`** so users do not lose edits when switching providers.
+
+### Why map catalog metrics (`l2`, `ip`, …) to pipeline metrics?
+
+**`VectorStoreConfigSchema`** only allows **cosine**, **euclidean**, **dot** (see **`SimilarityMetricSchema`**). Catalog rows use vendor names (**l2** ≈ **euclidean**, **ip** ≈ **dot**). **`catalogMetricToSchemaMetric`** and **`schemaMetricsForStore`** restrict the metric dropdown to **export-safe** values; metrics with no mapping (e.g. **hamming**) are omitted from the selector.
+
+### Which fields are editable in **`VectorStoreConfigurator`**?
+
+**Provider** (cards), **indexName** (validated pattern), **metric** (intersection of catalog + schema), **replicas**, **shards**, optional **namespace**, optional **cloud.region** and **cloud.instanceType** (hints only — no secrets). Clearing both region and instance **removes** **`configuration.cloud`** from state.
+
+### How does filtering work?
+
+Client-side filters: **text search** (id, name, description, bestFor), **deployment type**, **cloud native** (AWS/GCP/Azure must be true on **`cloudNative`**), and **hybrid search capable** (**features.hybridSearch**). If filters exclude the **currently selected** provider, that row is **pinned** at the top (same pattern as **Embedding**).
+
+### Does the UI create or connect to a live index?
+
+**No.** Configuration only. Provisioning and queries run through backend **`VectorStoreService` (P2-4)** and runtime credentials — not in the Designer draft.
+
+### How does **`StageNavigator`** summarize vector store?
+
+**`vectorStoreHint`** shows catalog **display name** · **indexName** (truncated), using **`getVectorStoreMeta`**.
+
+### How does this align with code export?
+
+**`pythonCodeGenerator`** switches on **`stages.vectorStore.provider`** for **`QdrantVectorStore`**, **`PineconeVectorStore`**, etc. (**`VECTORSTORE_IMPORTS`** / **`buildVectorStore`**). Terraform and YAML generators also read **`vectorStore`**.
+
+### What validation rules apply?
+
+**`VectorStoreConfigSchema`**: **provider** enum; **indexName** non-empty, **≤ 100** chars, **`/^[a-z0-9-]+$/`**; **configuration** with optional **metric**, **replicas** ≥ 1, **shards** ≥ 1, optional **namespace**, optional **cloud** with **region** required when the object is present (Zod shape).
+
+### What accessibility patterns are used?
+
+Provider grid uses **`role="radiogroup"`** / **`role="radio"`** / **`aria-checked`**. Filter controls use **`aria-labelledby`** / **`aria-live`** where appropriate.
+
+### What tests cover this task?
+
+**`apps/web/src/lib/__tests__/vector-stores-catalog.test.ts`** covers store **count**, **lookup**, **`isVectorStoreProvider`**, metric **mapping**, **`schemaMetricsForStore`**, and **`vectorStorePatchFromCatalog`**. **`VectorStoreConfigurator`** relies on existing **`VectorStoreConfigSchema`** tests in **`validators.test.ts`**.
+
+### What remains placeholder after P5-6?
+
+Stages **retrieval** through **review** still use dashed placeholders until **P5-7+**. **Cloud** through **vector store** are interactive.
+
+### How do you add a new vector store to the catalog?
+
+1. Add an entry to **`data/vector-stores.json`** with **`id`** equal to a **`VectorStoreProvider`** in **`validators.ts`**. 2. Ensure **`supportedMetrics`** map to pipeline metrics where possible. 3. Extend **`pythonCodeGenerator`** **`VECTORSTORE_IMPORTS`** / **`buildVectorStore`** if codegen should support the provider. 4. Bump **`vector-stores-catalog.test.ts`** expected count.
+
+---
+
+## Phase 5 · P5-7 · Retrieval Configuration
+
+### What problem does the Retrieval stage solve in Designer mode?
+
+Users must define **how chunks are retrieved** from the vector index: **strategy** (similarity, MMR, hybrid, parent–child, multi-query, ensemble), **top-k**, optional **score threshold**, optional **metadata filters**, and optional **reranking** (provider, model, top-n). **P5-7** surfaces **`data/retrieval-strategies.json`** and **`data/models/rerankers.json`**, writing **`updateStages({ retrieval, reranking })`** so the draft matches **`RetrievalConfig`** / **`RerankingConfig`** and **`RetrievalConfigSchema`** / **`RerankingConfigSchema`**.
+
+### Where do retrieval strategy descriptions come from?
+
+**`data/retrieval-strategies.json`** is bundled via **`apps/web/src/lib/retrieval-strategies-catalog.ts`**. Each row has **bestFor**, **pros/cons**, **implementationComplexity**, and **defaultConfig** used to seed **`retrievalDefaultsFromCatalog(strategy)`**.
+
+### How does choosing a strategy update **`draft.stages.retrieval`**?
+
+**`applyStrategy(id)`** merges **`retrievalDefaultsFromCatalog`** (including clearing **hybridSearch** / **parentChildConfig** / **multiQueryConfig** when switching away) while preserving **filters** unless the user edits them. **Hybrid** requires **`hybridSearch.alpha`** (slider). **Parent–child** sets **`parentChildConfig`**. **Multi-query** sets **`multiQueryConfig.numVariants`** and **`llmModel`** (defaults from **`draft.stages.generation.model`** when available).
+
+### Why are MMR / ensemble extra knobs only described in copy, not extra fields?
+
+**`RetrievalConfig`** in **`pipeline.ts`** only persists fields that **exports and validators** understand (top-k, threshold, hybrid blend, parent–child sizes, multi-query variants). Catalog text explains **fetch-k**, **λ**, **RRF** for interviews and docs; **Python/YAML generators** already branch on **strategy** with sensible literals.
+
+### How do metadata filters work?
+
+**`filters`** is **`MetadataFilter[]`**: **key**, **operator** (**eq**, **ne**, **gt**, …, **in**, **nin**, **contains**), **value** (string / number / boolean / string[]). **in** / **nin** values are edited as comma-separated lists and parsed in the client.
+
+### How does reranking integrate?
+
+**`RerankingConfig`**: **enabled**, optional **provider** (**cohere** | **huggingface** | **custom**), **model** (catalog id or free text for custom), **topN**. Catalog **`rerankers.json`** is loaded through **`rerankers-catalog.ts`**. **`pythonCodeGenerator`** emits **Cohere** or **CrossEncoder** rerank when **enabled**.
+
+### What is the **`rerank-focus`** variant?
+
+The **`Reranking`** route (**`/designer/reranking`**) renders **`RetrievalConfigurator variant="rerank-focus"`**: compact **current retrieval** summary + **full reranking panel** + link back to **`/designer/retrieval`** for strategy/filters. **`/designer/retrieval`** uses **`variant="full"`** (strategies, parameters, filters, reranking).
+
+### How does this relate to **P2-5 Retrieval Service**?
+
+The Designer stores **configuration only**. Runtime retrieval, hybrid BM25 wiring, and rerank execution live in backend **`RetrievalService`** and workers — the draft is the contract for codegen and APIs.
+
+### What validation applies?
+
+**`RetrievalConfigSchema`**: **topK** 1–100; **hybrid** requires **hybridSearch**; **multiQueryConfig** variants 2–10 and non-empty **llmModel**. **Filters** must satisfy **`MetadataFilterSchema`**. **Reranking** validated by **`RerankingConfigSchema`**.
+
+### What tests cover this task?
+
+**`apps/web/src/lib/__tests__/retrieval-strategies-catalog.test.ts`** exercises strategy **count**, **lookup**, **`isRetrievalStrategyId`**, and **`retrievalDefaultsFromCatalog`**. **`validators.test.ts`** already covers retrieval/reranking shapes.
+
+### What remains placeholder after P5-7?
+
+Stages **generation** through **review** stay dashed until **P5-8+**. **Cloud** through **retrieval/reranking** (configured on Retrieval + Reranking routes) are interactive.
+
+### How do you add a new retrieval strategy to the product?
+
+1. Extend **`RetrievalStrategy`** and **`RetrievalStrategySchema`** if the id is new. 2. Add a strategy block to **`data/retrieval-strategies.json`**. 3. Teach **`retrievalDefaultsFromCatalog`** / UI sections if new persisted fields are required. 4. Update **`pythonCodeGenerator`** / **`yamlGenerator`** / **`mermaidGenerator`** if export behavior should change.
+
+---
+
+## Phase 5 · P5-8 · Generation Model Selector
+
+### What problem does the Generation stage solve in Designer mode?
+
+Users must pick the **LLM** that will **answer** from retrieved context: **model id**, **provider**, and **inference** settings (**temperature**, **max output tokens**, optional **top-p**, optional **system prompt**, optional **output format**). **P5-8** surfaces **`data/models/generation.json`** through **`generation-catalog.ts`**, writing **`updateStages({ generation })`** so the draft matches **`GenerationConfig`** and **`GenerationConfigSchema`**.
+
+### Where do generation model metadata and pricing come from?
+
+**`data/models/generation.json`** is bundled like embeddings: **`apps/web/src/lib/generation-catalog.ts`** imports the JSON, exposes **`listGenerationModels`**, **`getGenerationModelMeta`**, and **`isGenerationProvider`**. Each entry includes **context window**, **max output tokens**, **cost per 1M in/out**, **tier**, **latency**, and capability flags (**supportsStreaming**, **supportsToolUse**, **supportsJsonMode**).
+
+### How does selecting a model update **`draft.stages.generation`**?
+
+**`generationConfigFromCatalogEntry(modelId, current)`** returns **`model`**, **`provider`**, and a **max token** value: **preserves** the user’s current **`maxTokens`** when it still fits the new model; otherwise **caps** to **`maxOutputTokens`** from the catalog (and floors at **64** to satisfy Zod). **Temperature**, **topP**, **systemPrompt**, and **outputFormat** are **not** cleared on model change — they are merged in the component with **`mergeGeneration`**.
+
+### Why is the current model “pinned” when filters hide it?
+
+Same pattern as **P5-5**: if **search/filters** exclude the **already selected** model, the card grid **prepends** that row and labels it **“Current · outside filters”** so the selection never disappears.
+
+### Which inference controls does the UI expose?
+
+- **Temperature**: slider **0–2** (step **0.05**).  
+- **Max output tokens**: range **64** to **`min(32768, catalog maxOutputTokens)`** for the active model.  
+- **Top-p**: optional; checkbox **“Use nucleus sampling”** toggles **`topP`** between **undefined** (omit from payload / provider default) and a **0–1** slider (default **0.95** when enabled).  
+- **Output format**: **text** | **json** | **markdown** (**`OutputFormat`**).  
+- **System prompt**: optional textarea; empty string clears **`systemPrompt`** (**`undefined`**).
+
+### How does **`StageNavigator`** summarize the Generation stage?
+
+**`generationHint`** shows **catalog display name** (or id), **temperature** (**`T0.1`**), and **max tokens** (**`1024 tok`**), using **`getGenerationModelMeta`**.
+
+### How does this relate to **P2-6 Generation Service**?
+
+The Designer stores **configuration only**. Actual provider calls, streaming, and tool execution live in backend **`GenerationService`** and related workers; this stage is the **contract** for codegen, cost APIs, and exports.
+
+### What validation applies?
+
+**`GenerationConfigSchema`**: **model** non-empty; **provider** enum; **temperature** **0–2**; **maxTokens** **64–32768**; **topP** **0–1** optional; **systemPrompt** max **10,000** chars; **outputFormat** optional enum.
+
+### What tests cover this task?
+
+**`apps/web/src/lib/__tests__/generation-catalog.test.ts`** covers model **count**, **lookup**, **`isGenerationProvider`**, and **`generationConfigFromCatalogEntry`** (including **capping** max tokens to a model’s **maxOutputTokens**).
+
+### What remains placeholder after P5-8?
+
+Stages **routing** through **review** stay dashed until **P5-9+**. **Cloud** through **generation** are interactive in the Designer.
+
+### How do you add a new generation model to the product?
+
+1. Add a row to **`data/models/generation.json`** with **`provider`** in **`GenerationProviderSchema`**. 2. If the **id** is new, ensure **exports** and **codegen** (e.g. **`pythonCodeGenerator`**) can map it or treat it as a string model id. 3. Bump **`generation-catalog.test.ts`** expected **count** if the test asserts it.
+
+---
+
+## Phase 5 · P5-9 · Routing, Memory & Evaluation Config
+
+### What problem do the Routing, Memory, and Evaluation stages solve in Designer mode?
+
+**Routing** lets operators **send different user queries to different LLMs** (e.g. cheap model for simple FAQs, larger model for complex reasoning) using **ordered rules** and a **fallback** model. **Memory** configures **multi-turn context** (none vs buffer vs summary vs vector-backed memory) for conversational RAG. **Evaluation** defines **quality metrics**, **test set size**, and **schedule** intent for the **Evaluation Engine (P2-7)** and CI. **P5-9** surfaces all three on separate routes and persists them via **`updateStages({ routing | memory | evaluation })`**.
+
+### How does **`RoutingConfigurator`** align with the shared types?
+
+It edits **`RoutingConfig`**: **`enabled`**, optional **`defaultModel`**, optional **`rules`** (**`RoutingRule`**: **`condition`** — keyword | query-length | semantic-complexity; optional **`keywords`**, **`threshold`**; **`targetModel`**). **`RoutingConfigSchema`** in **`validators.ts`** validates the shape. **Target** and **fallback** models are chosen from **`listGenerationModels()`** so ids stay consistent with **`Generation`** and **`data/models/generation.json`**.
+
+### Why reuse the generation catalog for routing models?
+
+Routing **`targetModel`** / **`defaultModel`** must be **provider-executable model ids** already used elsewhere in the draft. Reusing **`generation-catalog.ts`** avoids free-text drift and keeps exports (**`pythonCodeGenerator`**) aligned with **LangChain** / provider constructors.
+
+### How are routing rules ordered?
+
+The UI displays rules **top to bottom**; the narrative matches typical engines (**first match wins**). The backend orchestrator interprets the saved JSON; the Designer captures **declarative** intent for YAML/Python export.
+
+### What does each **memory type** mean?
+
+- **`none`**: Stateless RAG (no chat memory).  
+- **`conversation-buffer`**: Sliding window of recent messages (**`windowSize`**).  
+- **`summary-buffer`**: Summarize history; **`windowSize`** and optional **`maxTokens`** cap cost.  
+- **`vector-memory`**: Embed/store past turns for retrieval-style memory; optional **`maxTokens`**.
+
+**`MemoryConfigSchema`** constrains **`windowSize`** (1–100) and **`MemoryType`** enum.
+
+### How does **Python codegen** use memory?
+
+**`pythonCodeGenerator.ts`** emits **`ConversationBufferWindowMemory`** (and related wiring) when **`stages.memory.type !== 'none'`**, using **`windowSize`** as **`k`**. The Designer only sets **configuration**; runtime libraries execute memory.
+
+### Which evaluation metrics can users select?
+
+**`EvaluationMetricName`**: **faithfulness**, **answer_relevance**, **context_precision**, **context_recall**, **latency**. The UI toggles checkboxes; **`metrics`** is stored as an array. **`testSetSize`** is clamped **10–1000** by schema; **`schedule`** is **on-demand** or **continuous** (continuous assumes worker/cron support later).
+
+### What validation applies?
+
+- **`RoutingConfigSchema`**: **`enabled`** boolean; each rule has **`condition`** enum, **`targetModel`** non-empty; optional **`threshold`**, **`keywords`**.  
+- **`MemoryConfigSchema`**: **`type`** enum; optional **`windowSize`**, **`maxTokens`**, **`sessionPersistence`**.  
+- **`EvaluationConfigSchema`**: **`enabled`**; optional **`metrics`** array of allowed metric names; **`testSetSize`** optional int range; **`schedule`** optional enum.
+
+### How does **`StageNavigator`** summarize these stages?
+
+- **`routingHint`**: **Off** / **On · N rules** (or **no rules** when enabled but empty).  
+- **`memoryHint`**: Short label (**None**, **Buffer**, **Summary**, **Vector**).  
+- **`evaluationHint`**: **Off** / **On · N metrics**.
+
+### How do these stages relate to **P2-6 / P2-7** backend services?
+
+**Generation** execution remains **`GenerationService`**. **Evaluation** configuration informs **`Evaluation Engine`** jobs and RAGAS-style runs but does not execute tests inside the Designer. **Routing** may be realized in application code or LangGraph; the draft is the **contract** for export.
+
+### What remains placeholder after P5-9?
+
+Only **Review** and later **P5-10+** tasks (**pipeline visualizer**, **cost**, **export**, **template gallery**) remain as separate milestones; **routing** through **evaluation** are interactive.
+
+### How would you add a new routing condition type?
+
+1. Extend **`RoutingRule.condition`** in **`pipeline.ts`** and **`RoutingRuleSchema`** in **`validators.ts`**. 2. Add UI controls in **`RoutingConfigurator`** for the new branch. 3. Update **`pythonCodeGenerator`** / **`yamlGenerator`** / **`mermaidGenerator`** if exports should emit logic for that condition.
+
+### How would you add a new evaluation metric?
+
+1. Add to **`EvaluationMetricName`** and **`EvaluationMetricNameSchema`**. 2. Add a checkbox row in **`EvaluationConfigurator`**. 3. Teach **`Evaluation Engine`** (backend) to compute it.
+
+---
+
+## Phase 5 · P5-10 · Pipeline Visualizer
+
+### What does **P5-10** deliver?
+
+A **live pipeline preview** in Designer mode: a **text summary** (one-line chain plus bullets) and a **Mermaid flowchart** that updates whenever **`draft`** changes in **`useDesignerStore`**. It appears **below the stage list** on **`lg+`** and as a **collapsible “Pipeline preview”** above the main panel on **narrow** screens.
+
+### Where is it mounted?
+
+**`DesignerShell`** renders **`PipelineVisualizer`** with **`placement="sidebar"`** next to **`StageNavigator`** and **`placement="main"`** above **`children`**. Only one placement is visible per breakpoint so **Mermaid** runs once.
+
+### How is the diagram produced?
+
+**`generateMermaidDiagram(stages, cloudProvider)`** in **`apps/web/src/lib/generators/mermaidGenerator.ts`** builds a **`flowchart LR`** string with **`subgraph`** blocks for **Indexing** (source → chunk → embed → vector store) and **Query** (user query → optional memory → retrieve → optional rerank → optional router → generate → answer → optional evaluate). **`VS --> RET`** connects the index to retrieval across subgraphs.
+
+### Why fix edges for memory and routing?
+
+Earlier drafts duplicated **`QUERY --> RET`** when memory was on and attached **`ROUTER`** directly from **`QUERY`**, which misrepresented runtime order. The generator now chains **memory between query and retrieval** and places **routing between the post-retrieval tail and generation**.
+
+### What is **`generatePipelineHighlights`**?
+
+A companion helper returning **short bullet strings** (cloud, ingestion, chunking, embedding, vector store, retrieval, reranking, generation, routing, memory, evaluation) for the **summary list** next to the SVG.
+
+### How does client rendering work?
+
+**`mermaid.render(id, definition)`** runs in **`useEffect`** after **`mermaid.initialize({ theme, securityLevel: 'loose' })`**. Theme follows **`.dark`** on **`documentElement`** and **`prefers-color-scheme`**. A **loader** shows while **SVG** is generated; errors surface inline.
+
+### Does the visualizer persist anything?
+
+No. It **reads** **`draft`** only; persistence stays **`persist`** middleware on **`useDesignerStore`** (same as other configurators).
+
+### How does this relate to **exports**?
+
+**`generateMermaidDiagram`** is shared with **codegen / export** flows from **P3** utilities; the Designer preview uses the **same canonical graph** shape as exported diagrams where applicable.
+
+### Trade-offs of **Mermaid in the browser**
+
+**Pros**: Diagram stays aligned with **shared generator** logic; no extra graph library. **Cons**: Bundle includes **mermaid**; **SSR** does not render SVG (client-only). Mitigation: diagram mounts only after breakpoint selection and shows a **loading** state.
+
+### Accessibility notes
+
+The SVG container uses **`role="img"`** with **`aria-label="Pipeline flow diagram"`**; the collapsible mobile panel uses a **`summary`** control with **focus-visible** ring.
+
+### How would you add **guardrails** to the picture?
+
+Extend **`generateMermaidDiagram`** (or pass **`guardrails`** into a wrapper) to draw optional nodes for **input / retrieval / output** guard stages when **`draft.guardrails`** is non-null, matching **`GuardrailsConfig`** in **`pipeline.ts`**.
+
+### Interview trap: why **`placement`** props instead of CSS-only hide?
+
+Hiding with **`hidden`** still mounts children; **two** **Mermaid** instances would **double-render** and fight for **`innerHTML`**. **`placement`** plus **`matchMedia`** ensures **one** active diagram instance.
+
+### What remains after **P5-10** for Designer polish?
+
+**Code export UI** (**P5-12**), **review page** (**P5-13**), and **template gallery** (**P5-14**) remain separate milestones. **P5-11** (cost estimator) is implemented — see the **Phase 5 · P5-11** section below.
+
+---
+
+## Phase 5 · P5-11 — Cost Estimator Component
+
+### What problem does the cost estimator solve?
+
+Designers need **approximate USD** visibility while tuning models, chunk sizes, **`top_k`**, vector store, and reranking so they can compare trade-offs before exporting or deploying. The UI shows **per-query** and **monthly** totals plus a **line-item breakdown** aligned with backend heuristics.
+
+### Which API does the frontend call — is `/api/designer/cost` different?
+
+**`POST /api/designer/cost`** and **`POST /api/utilities/cost`** both accept **`CostRequest`** and return **`CostEstimateSchema`** via the same **`CostEstimator`** / **`CostService`** logic. The **P5-11** UI calls **`/api/utilities/cost`** so Autopilot or other clients can share the same URL family for **validate / cost / rag-preview** without implying a persisted Designer project; either endpoint would be correct for a pure estimate.
+
+### What is in the request body?
+
+- **`config`**: full **`PipelineConfiguration`** from **`useDesignerStore`** (camelCase JSON).
+- **`queriesPerMonth`**, **`documentsCount`**, **`avgDocumentTokens`**: defaults **100_000**, **1_000**, **500** match **`CostRequest`** in **`apps/api/app/schemas/designer.py`** when omitted on the server; the UI exposes them so users can stress-test scale assumptions.
+
+### How does the backend compute costs?
+
+**`CostEstimator`** in **`apps/api/app/utils/cost_calculator.py`** loads **`pricing.json`**, then combines **query-path embedding** (chunk tokens × embedding $/1M, scaled by retrieval strategy variants), **generation** (context + output tokens × model input/output $/1M), optional **reranking** (**`costPer1KQueries`**), **monthly storage** (estimated vector GB × provider $/GB/mo), and **retrieval read/query** units where priced. It returns **`CostEstimateSchema`** with **`breakdown`** rows **`embedding`**, **`vector_storage`**, **`retrieval_ops`**, **`reranking`**, **`generation`**.
+
+### Why debounce the client requests?
+
+Every slider or text change updates **`draft`** frequently. A **~450 ms** debounce limits load on the API and avoids flickering numbers while the user is still dragging controls.
+
+### Why keep workload assumptions out of Zustand?
+
+**`persist`** middleware writes **localStorage** on each **`draft`** change. Bumping **`queriesPerMonth`** on every keystroke would **re-serialize** the whole pipeline object unnecessarily. Local **`useState`** in **`CostEstimator`** keeps assumptions ephemeral unless we later add an explicit “save assumptions” feature.
+
+### How are API errors surfaced?
+
+**`apiClient.post`** throws **`ApiError`** on non-2xx responses. The component reads **`detail`** from FastAPI JSON when present (e.g. **503** if **`pricing.json`** is missing) and renders an **`role="alert"`** banner.
+
+### How does the UI map cryptic breakdown **`component`** strings?
+
+**`componentLabel`** maps **`vector_storage`**, **`retrieval_ops`**, etc., to human-readable labels for the table; percentages come from the API (**`percentage`** field on each **`CostBreakdown`**).
+
+### Interview trap: **`per_month`** vs sum of category fields
+
+**`perMonth`** / **`total`** should match the sum of **monthly** category amounts (**embedding + storage + retrieval + reranking + generation**); **`breakdown`** rows use the same underlying totals with **percentage** split. If they diverge, that would be a backend bug — the UI displays API values as-is.
+
+### How would you cache or dedupe cost calls across tabs?
+
+Use **SWR** / **TanStack Query** with a **`queryKey`** of **`[ 'cost', digest ]`**, or a small server-side cache keyed by **hash(config)+assumptions** with short TTL — trade freshness vs load.
+
+### What remains after **P5-11**?
+
+**P5-12** code export UI, **P5-13** review page, **P5-14** template gallery.
+
+---
+
+## Phase 5 · P5-12 — Code Export Component
+
+### What does **P5-12** deliver?
+
+A **Designer-mode export viewer** mounted in **`DesignerShell`** between **`CostEstimator`** and **`PipelineVisualizer`**. Users pick one of five **formats** aligned with **`ExportFormat`** in **`apps/api/app/schemas/designer.py`**: **python**, **yaml**, **terraform**, **docker-compose**, **k8s**. The UI shows generated **source text**, **copy** and **download** actions, and optional **deploy hints** (starter shell commands, copyable separately).
+
+### Which endpoint does the UI call?
+
+**`POST /api/designer/export`** on the FastAPI **`designer`** router (**prefix** **`/api/designer`**). The Next.js app uses **same-origin** **`apiClient.post('/api/designer/export', …)`** so **`next.config.js`** rewrites proxy to the backend without CORS issues.
+
+### What is the JSON contract?
+
+**Request**: **`{ config, format }`** where **`config`** is the full **`PipelineConfiguration`** from **`useDesignerStore`** (camelCase keys, **`RAGBaseModel`** symmetry with Pydantic). **Response**: **`DesignerExportResponse`** — **`code`**, **`filename`**, **`format`**, **`contentType`** — matching **`ExportResponse`** with **camelCase** aliases.
+
+### How does debouncing interact with format changes?
+
+**`draftDigest`** is **`JSON.stringify(draft)`**. An effect schedules **`fetchExport`** with **~450 ms** debounce when the digest changes (user editing stages). When **`format`** alone changes, **`prevFormat`** detects a **tab switch** and uses **0 ms** delay so the new artefact appears immediately.
+
+### Why keep export output out of Zustand?
+
+Export blobs can be **large** and change on every keystroke if stored globally. Keeping **`result`** in **local React state** avoids **`localStorage`** **`persist`** bloat and keeps the store focused on the **editable** pipeline contract.
+
+### How do **Copy** and **Download** work?
+
+**Copy** uses **`navigator.clipboard.writeText(result.code)`** with a short **“Copied”** affordance. **Download** builds a **`Blob`** from **`result.code`** with **`result.contentType`**, then triggers an **`<a download={filename}>`** programmatic click and revokes the object URL.
+
+### What does **Deploy hints** mean if we do not auto-deploy?
+
+**No cloud APIs** run from the browser. **`deploy-hints.ts`** returns **educational** commands (e.g. **`docker compose -f … up`**, **`kubectl apply -f …`**, **`terraform init`**) so operators have a **starting checklist**. Users must still supply **secrets**, **kube context**, and **TF backend** configuration.
+
+### Why sanitize filenames in deploy hints?
+
+User-controlled **`draft.name`** flows into suggested **`filename`** values from **`ExportService._filename_for`**. **`deployHintCommand`** replaces characters outside a safe set when interpolating into shell snippets to reduce **copy-paste injection** surprises (defence in depth; not a substitute for reviewing commands).
+
+### How does this relate to **P3** code generators?
+
+**P4-4** server-side **`ExportService`** is the **source of truth** for downloadable artefacts. **P3** TypeScript generators (**`pythonCodeGenerator`**, **`yamlGenerator`**, etc.) support **client-side previews** and **consistency tests**; the **Designer export UI** always displays **API-generated** output so **deployable bytes** match what operators save from the backend.
+
+### Interview trap: **`/api/utilities/export`**?
+
+There is **no** utilities export route in this codebase — exports live under **`/api/designer/export`** because they are **Designer pipeline** artefacts. **Cost** optionally uses **`/api/utilities/cost`** for shared access, but export is **Designer-scoped**.
+
+### How would you add **zip multi-file export**?
+
+Extend **`ExportService`** with a **`format: "bundle"`** that streams a **zip** (Python + compose + k8s), return **`contentType: application/zip`**, and teach the frontend to **download** binary **`ArrayBuffer`** instead of UTF-8 text only.
+
+### How would you add **syntax highlighting**?
+
+Integrate **Prism** (already a dependency) or **Shiki** in a **`useEffect`** that highlights **`result.code`** when **`format`** changes; guard **SSR** (highlight runs client-only).
+
+### What automated tests cover the new behaviour?
+
+**`deploy-hints.test.ts`** (**Vitest**) asserts command strings for **python**, **docker-compose**, **k8s**, and partial checks for **terraform**. The **React** layer can be covered later with **RTL** + **MSW** if you want to mock **`/api/designer/export`**.
+
+### What remains after **P5-12**?
+
+**P5-14** template gallery (and later phases).
+
+---
+
+## Phase 5 · P5-13 · Designer Review Page
+
+### What problem does the Review stage solve?
+
+After eleven configuration stages, operators need a **single checkpoint** that surfaces the **whole draft** (names, key parameters, flow bullets) without hunting through each step again, while keeping **cost**, **export**, and **live Mermaid** one scroll away. Review also wires **deep links** into the existing footer strips so we do not duplicate API calls or diagram rendering logic.
+
+### Where does the Review UI live in the component tree?
+
+**`/designer/review`** resolves through **`apps/web/src/app/designer/[[...step]]/page.tsx`** → **`DesignerStepView`** → **`DesignerStagePlaceholder`**, which **early-returns** **`DesignerReviewPage`** when **`stageId === 'review'`**. **`DesignerShell`** still wraps all designer routes and continues to mount **`CostEstimator`**, **`CodeExporter`**, and **`PipelineVisualizer`** below the scrollable main pane.
+
+### Why add **`designer-section-anchors.ts`**?
+
+Three stable DOM **`id`** values (**`designer-section-cost`**, **`designer-section-export`**, **`designer-section-pipeline`**) are shared between **`DesignerShell`** (passed into each footer **`section`**) and **`DesignerReviewPage`** (scroll targets). A tiny module avoids string drift and keeps Review buttons aligned with the visual stack order (**cost → export → graph**).
+
+### How does smooth scrolling behave with a sticky layout?
+
+Each footer **`section`** accepts an optional **`id`** and adds **`scroll-mt-4`** so **`scrollIntoView({ behavior: 'smooth', block: 'start' })`** leaves a small offset under fixed chrome / borders and the target is not flush-hidden at the viewport edge.
+
+### How is the textual summary produced?
+
+**`generatePipelineSummary`** and **`generatePipelineHighlights`** from **`mermaidGenerator.ts`** are called with **`maxVisitedStageIndex = DESIGNER_STAGES.length - 1`** so Review always reflects the **full draft**, even if the progressive diagram still reflects a lower **`diagramMaxVisitedStageIndex`** until the user has navigated through every stage.
+
+### What actions are offered besides jumping to footer strips?
+
+- **Copy text summary** — pipeline name, one-line flow, and bullet list (clipboard).  
+- **Copy draft JSON** — pretty-printed **`PipelineConfiguration`** for tickets or API replays.  
+- **Reset draft** — calls **`resetDraft()`** after **`window.confirm`** (clears persisted Zustand state in the browser).  
+- **Stage checklist** — links back to each non-review **`DESIGNER_STAGES`** path for quick edits.  
+- Footer links: **home**, **templates**, **projects**.
+
+### Why not embed a second Mermaid instance inside Review?
+
+**`PipelineVisualizer`** already owns Mermaid init, zoom, PiP, and invalidation. Duplicating it would double CPU work and risk theme drift. Review **navigates** to the existing section instead.
+
+### Interview trap: does Review save to PostgreSQL?
+
+Not in this task. The draft is still **`persist`**’d **`useDesignerStore`** to **`localStorage`**; **Projects** / **Designer Config API** persistence is a separate workflow. The Review page links to **`ROUTES.projects`** for discoverability only.
+
+### How would you add “Save to project” on Review?
+
+Add a button that **`POST`s** **`/api/designer/config`** (or projects sub-resource) with **`draft`**, handle loading/errors, show toast, and optionally redirect to **`/projects/{id}`** — keeping Review as an orchestration surface, not a second source of truth.
+
+### What automated tests would you add next?
+
+**RTL** test that **`DesignerReviewPage`** renders summary cards from a **hydrated** store fixture; **Playwright** journey that lands on **`/designer/review`** and asserts **`#designer-section-cost`** exists after clicking **“Cost estimate”**.
+
+### What remains after **P5-13**?
+
+**P5-14** template gallery.
+
+---
+
+## Phase 5 · P5-14 · Template Gallery Page
+
+### What user problem does the Template Gallery solve?
+
+Operators often want a **known-good baseline** (chunk sizes, models, vector store) instead of configuring eleven stages from scratch. The gallery surfaces **catalog metadata** (use case, complexity, cost band, tags, providers) and offers **one-click persistence** via the **Templates** and **Projects** APIs, then hands off to **Designer** with the saved **`PipelineConfiguration`**.
+
+### Where does the UI live?
+
+**`/templates`** is implemented by **`apps/web/src/app/templates/page.tsx`**, which renders **`TemplateGallery`** (**`apps/web/src/components/templates/template-gallery.tsx`**). The route is already linked from the **navbar**, **Designer** placeholders, and **Review** cross-links.
+
+### Which backend endpoints does the gallery call?
+
+- **`GET /api/templates`** — returns **`TemplatesCatalogResponse`** (version, description, **`templates[]`** with full **`config`** per entry, camelCase JSON).  
+- **`GET /api/projects?page=1&page_size=50`** — populates the **“Existing project”** dropdown when applying a template.  
+- **`POST /api/projects/`** — optional when the user chooses **“New project”** before apply.  
+- **`POST /api/templates/{templateId}/apply`** — body **`{ projectId, name? }`**; responds **201** with **`ApplyTemplateResponse`** (saved config row plus **`templateId`**).
+
+### Why both “Use template” and “Preview locally”?
+
+**Preview locally** only calls **`loadPipeline(template.config)`** and navigates to **`/designer/review`** — no database row, useful for demos when the API is down. **Use template** persists a **Designer config** against a **real project UUID** so the pipeline can be reloaded, shared, and extended in later phases.
+
+### How is client state kept consistent with the server?
+
+After a successful apply, **`loadPipeline(applied.config)`** hydrates **`useDesignerStore`**. **`useProjectStore`** is updated: **`addProject`** when the server project is new to this browser, or **`updateProject`** with **`linkedPipelineId`** when the UUID already exists locally, then **`setActiveProject`**.
+
+### Why default “New project” in the apply dialog?
+
+The **sidebar project list** is still primarily **local-first**; not every browser session has already fetched server projects. Defaulting to **create** avoids an empty **Existing** selection and matches the common “start a workspace from this preset” mental model.
+
+### How do search and complexity filters work?
+
+Filtering is **client-side** over the catalog payload: a case-insensitive substring match across **name**, **description**, **useCase**, and **tags**, plus an optional **complexity** chip (**all / beginner / intermediate / advanced**).
+
+### What UX stack is used for the apply modal?
+
+**Radix Dialog** (**`@radix-ui/react-dialog`**) provides focus management and overlay semantics, consistent with other Radix usage in the app (**dropdown menu** in the navbar).
+
+### Interview trap: does **`GET /api/templates`** return only summaries?
+
+No — each catalog entry includes the **full** embedded **`config`** (same shape as **`PipelineConfiguration`**). The UI only *displays* metadata on cards to keep the layout light; **Preview** / **Apply** reuse the embedded object without a second **`GET /api/templates/{id}`** round trip.
+
+### What error states should you expect?
+
+- **Catalog load failure** — misconfigured **`TEMPLATES_CATALOG_PATH`**, missing **`data/templates.json`**, or API offline; the page shows a destructive-styled alert with the **proxy hint** from **`apiClient`**.  
+- **Apply failure** — invalid **`projectId`**, unknown template id, or DB constraint; **`ApiError`** **`detail`** is surfaced in-dialog.
+
+### What automated tests already guard this flow?
+
+**`apps/api/tests/test_templates.py`** covers list/get/apply happy paths and 404 cases. Frontend tests could add **MSW** + **RTL** for **`TemplateGallery`** fetch/apply if you want CI coverage without a live API.
+
+### What remains after **P5-14**?
+
+**Phase 6** Autopilot (**LangGraph** agents and orchestration).
+
+---
+
+## Phase 6 · P6-1 · LangGraph Agent Infrastructure
+
+### Why introduce LangGraph for Autopilot instead of a single Celery loop?
+
+Autopilot coordinates **multiple decision steps** (corpus analysis, chunking search, embedding benchmarks, retrieval tuning, evaluation). LangGraph gives a **first-class state machine**: explicit nodes, conditional edges, **checkpointing** for resume/cancel, and **message history** compatible with LangChain chat models. A flat Celery task is fine for linear stubs, but it does not model **branching, retries, or human-in-the-loop** without reinventing a graph runtime.
+
+### What lives under `app/core/agents/`?
+
+| Module | Role |
+|--------|------|
+| `state.py` | **`AutopilotGraphState`** TypedDict with reducers: **`add_messages`**, **`operator.add`** for `agent_trace`, **`merge_stage_outputs`** for `stage_outputs`. |
+| `prompts.py` | Shared **system** and **stage** prompt strings plus **`format_stage_delegation`** for consistent logging / LLM context. |
+| `tools.py` | **`@tool`** definitions and **`get_autopilot_bootstrap_tools()`** registry (stubs until P6-2+ wire real services). |
+| `graph.py` | **`compile_autopilot_bootstrap_graph`** — minimal **prepare → finalize** graph proving imports, reducers, and optional **`MemorySaver`** checkpointer. |
+
+### How does `AutopilotGraphState` map to the database?
+
+`AutopilotBuild` already stores **`requirements`**, **`stages`**, **`messages`**, **`result`**. The graph state is the **in-memory execution view**: `agent_trace` entries can be appended to **`messages`** JSON on the ORM row; `stage_outputs` keys align with **`stages`** and future **`AgentDecisionSchema`**. `pipeline_config` mirrors optional **`PipelineConfiguration`** from Designer handoff.
+
+### What is `AUTOPILOT_STAGE_ORDER` and why import it from the worker?
+
+It is the **canonical ordered tuple** of specialist stages (`analyze` … `evaluation`). **`app.worker.tasks`** previously duplicated the tuple as `_AUTOPILOT_STAGE_KEYS`; P6-1 **imports the same tuple** so stub progress and LangGraph subgraph ordering **cannot drift**.
+
+### Interview trap: why `Annotated[list[AnyMessage], add_messages]`?
+
+LangGraph merges node outputs per key. Without a reducer, the last write would **replace** the entire message list. **`add_messages`** concatenates and dedupes by message id so **LLM and tool messages** accumulate correctly across turns.
+
+### How do you test a graph without an LLM?
+
+The bootstrap nodes return **`AIMessage`** and dict updates only — **no model call**. Tests invoke **`invoke_autopilot_bootstrap`** with and without **`MemorySaver`** to validate compilation, reducers, and terminal **`current_stage == bootstrap_complete`**.
+
+### What is the next task after P6-1?
+
+**P6-2 · Document Analyst Agent** — first specialist node that reads corpus metadata and recommends chunking strategies.
+
 ---
 
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*

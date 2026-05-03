@@ -95,19 +95,120 @@ flowchart LR
   Cmp -.->|safeParse| V
 ```
 
+**Refinement (same design level):** if the **filtered** set omits the **currently selected** catalog id, **`EmbeddingConfigurator`** prepends that row to the grid and marks **“Current · outside filters”** so configuration state stays visible.
+
+---
+
+## Design level 6 — Vector store bound to `draft.stages.vectorStore` (after P5-6)
+
+The **Vector Store** stage renders **`VectorStoreConfigurator`**, which reads **`data/vector-stores.json`** via **`apps/web/src/lib/vector-stores-catalog.ts`**. Users filter by **type**, **cloud**, and **hybridSearch**, pick a **provider** card, and edit **`indexName`**, **metric** (intersection of catalog **supportedMetrics** and **`SimilarityMetric`**), **replicas/shards**, optional **namespace**, and optional **cloud** hints. Switching providers calls **`vectorStorePatchFromCatalog`** so **metric** stays valid; pinned rows mirror the Embedding stage when filters hide the active provider. **`StageNavigator`** shows **`vectorStoreHint`**.
+
+```mermaid
+flowchart LR
+  subgraph Repo["Monorepo"]
+    JSON[(data/vector-stores.json)]
+  end
+  subgraph Next["apps/web"]
+    Lib[vector-stores-catalog.ts]
+    Cmp[VectorStoreConfigurator]
+    V[Zod VectorStoreConfigSchema]
+    Z[(draft.stages.vectorStore)]
+  end
+  JSON --> Lib
+  Lib --> Cmp
+  Cmp -->|"updateStages"| Z
+  Cmp -.->|safeParse| V
+```
+
 ---
 
 ## Future levels (placeholder)
 
-Remaining P5 tasks add panels for **vector store**, **retrieval**, **generation**, **routing/memory/evaluation**, **visualizer**, **cost**, **export**, **review**, and **templates** — each **`updateStages`** / **`patchDraft`** onto the same **`draft`** consumed by Phase 4 APIs.
+Remaining P5 tasks add panels for **retrieval**, **generation**, **routing/memory/evaluation**, **visualizer**, **cost**, **export**, **review**, and **templates** — each **`updateStages`** / **`patchDraft`** onto the same **`draft`** consumed by Phase 4 APIs.
 
 ```mermaid
 flowchart TB
   Draft[PipelineConfiguration draft]
-  Draft --> VS[P5-6 vector store …]
+  Draft --> RT[P5-7 retrieval …]
   Draft --> Later[Later P5 stages …]
 ```
 
 ---
 
-*Append new “Design level” sections at the end as P5-6+ ship.*
+## Design level 9 — Routing, memory & evaluation bound to `draft.stages` (after P5-9)
+
+The **Routing**, **Memory**, and **Evaluation** routes render dedicated configurators that edit **`routing`** (**enabled**, **rules** with **condition** / **keywords** / **threshold** / **targetModel**, **defaultModel**), **`memory`** (**type**, **windowSize**, **maxTokens**, **sessionPersistence**), and **`evaluation`** (**enabled**, **metrics**, **testSetSize**, **schedule**). **Routing** model pickers reuse **`data/models/generation.json`** via **`generation-catalog.ts`** (same ids as **Generation**). Client validation uses existing **Zod** schemas; **Python**/**YAML**/**Mermaid** generators already referenced these shapes. **`StageNavigator`** shows compact hints (**routing**: on/off + rule count; **memory**: short type label; **evaluation**: on/off + metric count).
+
+```mermaid
+flowchart LR
+  subgraph Routes["Designer routes"]
+    RTG[/designer/routing]
+    MEM[/designer/memory]
+    EVL[/designer/evaluation]
+  end
+  subgraph Cmp["Components"]
+    RC[RoutingConfigurator]
+    MC[MemoryConfigurator]
+    EC[EvaluationConfigurator]
+  end
+  subgraph State["Zustand draft"]
+    S[(stages.routing memory evaluation)]
+  end
+  RTG --> RC
+  MEM --> MC
+  EVL --> EC
+  RC --> S
+  MC --> S
+  EC --> S
+```
+
+---
+
+## Design level 10 — Live pipeline graph & summary (after P5-10)
+
+**Read-only visualization** binds to the same **`useDesignerStore`** draft users edit in configurators. **`pipeline-visualizer.tsx`** chooses **`placement`** (**`sidebar`** vs **`main`**) using **`matchMedia('(min-width: 1024px)')`** so **exactly one** interactive panel mounts per breakpoint (avoiding duplicate **Mermaid** renders). **`generateMermaidDiagram`** outputs **`flowchart LR`** with **Indexing** vs **Query** subgraphs; **`generatePipelineHighlights`** lists human-readable bullets (cloud, ingestion, chunking, embedding, vector store, retrieval, reranking, generation, routing, memory, evaluation). **`DesignerShell`** wraps **`StageNavigator`** + sidebar visualizer in a **scrollable** column (`lg:overflow-y-auto`, `max-h` viewport); **`StageNavigator`** no longer sets fixed sidebar width (the shell column owns **`lg:w-[min(280px,…)]`**).
+
+```mermaid
+flowchart LR
+  subgraph Layout["DesignerShell column lg+"]
+    Nav[StageNavigator]
+    Viz[PipelineVisualizer sidebar]
+  end
+  subgraph Mobile["Main column sm"]
+    Fold[PipelineVisualizer main details]
+    Page[DesignerStagePlaceholder]
+  end
+  subgraph Data["Derived from draft"]
+    MG[mermaidGenerator.ts]
+  end
+  Nav --> MG
+  Viz --> MG
+  Fold --> MG
+  Page --> MG
+```
+
+---
+
+## Design level 11 — Export viewer & deploy hints (after P5-12)
+
+**`CodeExporter`** mirrors the **cost** strip pattern: shared **`draft`**, **debounced** refetch on JSON digest changes, **immediate** refetch when the user switches **format** tabs. It does **not** persist export output in **Zustand** (ephemeral view). **Deploy** is intentionally **non-destructive**: collapsible **hints** plus **clipboard** copy — no cloud API calls from the browser. **`ExportService`** (Phase 4) remains authoritative for bytes on the wire.
+
+```mermaid
+flowchart LR
+  subgraph UI["CodeExporter"]
+    T[Format tabs]
+    A[Copy / Download]
+    D[Deploy hints details]
+  end
+  subgraph API["POST /api/designer/export"]
+    G[python / yaml / tf / compose / k8s generators]
+  end
+  T -->|"format"| API
+  Z[(draft)] -->|"PipelineConfiguration"| API
+  API -->|"code + filename"| A
+  API --> D
+```
+
+---
+
+*Append new “Design level” sections at the end as P5-13+ ship.*
