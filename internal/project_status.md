@@ -44,11 +44,11 @@
 | 34 | Phase 4.5 | P4.5-6 · Monitoring & Metrics | `feature/p4-guardrails-monitoring` | Build guardrail metrics, logging, and safety dashboard endpoints. | ✅ done |
 | 35 | Phase 4.5 | P4.5-7 · Configuration & Testing | `feature/p4-guardrails-testing` | Add config files, comprehensive tests, and documentation updates. | ✅ done |
 |  | `Phase 5` | `Complete the full step-by-step visual pipeline builder experience in Designer mode.` |  |  |  |
-| 36 | Phase 5 | P5-1 · Designer Layout & Stage Navigator | `feature/p5-designer-layout` | Build multi-step Designer shell and stage navigation flow. | ⬜ pending |
-| 37 | Phase 5 | P5-2 · Cloud Provider Selector | `feature/p5-cloud-provider-selector` | Build UI for selecting cloud provider from catalog metadata. | ⬜ pending |
-| 38 | Phase 5 | P5-3 · Data Ingestion Configuration | `feature/p5-ingestion-config` | Build ingestion source/file/preprocessing/metadata configuration UI. | ⬜ pending |
-| 39 | Phase 5 | P5-4 · Chunking Configuration | `feature/p5-chunking-config` | Build chunking strategy and parameter configuration UI. | ⬜ pending |
-| 40 | Phase 5 | P5-5 · Embedding Model Selector | `feature/p5-embedding-selector` | Build embedding model discovery/filter/selection UI. | ⬜ pending |
+| 36 | Phase 5 | P5-1 · Designer Layout & Stage Navigator | `feature/p5-designer-layout` | Build multi-step Designer shell and stage navigation flow. | ✅ done |
+| 37 | Phase 5 | P5-2 · Cloud Provider Selector | `feature/p5-cloud-provider-selector` | Build UI for selecting cloud provider from catalog metadata. | ✅ done |
+| 38 | Phase 5 | P5-3 · Data Ingestion Configuration | `feature/p5-ingestion-config` | Build ingestion source/file/preprocessing/metadata configuration UI. | ✅ done |
+| 39 | Phase 5 | P5-4 · Chunking Configuration | `feature/p5-chunking-config` | Build chunking strategy and parameter configuration UI. | ✅ done |
+| 40 | Phase 5 | P5-5 · Embedding Model Selector | `feature/p5-embedding-selector` | Build embedding model discovery/filter/selection UI. | ✅ done |
 | 41 | Phase 5 | P5-6 · Vector Store Selector | `feature/p5-vectorstore-selector` | Build vector store selection and provider-specific config UI. | ⬜ pending |
 | 42 | Phase 5 | P5-7 · Retrieval Configuration | `feature/p5-retrieval-config` | Build retrieval strategy, top-k, filters, and reranking UI. | ⬜ pending |
 | 43 | Phase 5 | P5-8 · Generation Model Selector | `feature/p5-generation-selector` | Build generation model and inference parameter selection UI. | ⬜ pending |

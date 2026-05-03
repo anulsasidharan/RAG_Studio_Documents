@@ -3886,4 +3886,211 @@ Unit-test the JSON in CI, run **`pytest`** with fixture files, dry-run in stagin
 
 ---
 
+## Phase 5 · P5-2 Cloud Provider Selector
+
+### What does P5-2 deliver?
+
+A **first-stage configuration UI** in Designer mode that lets users choose **AWS**, **GCP**, **Azure**, or **Multi-Cloud** using metadata from the committed **`data/cloud-providers.json`** catalog (not hard-coded strings in the component). The selection updates **`draft.cloudProvider`** in **`useDesignerStore`** via **`patchDraft`**, so it persists with the rest of the pipeline draft (Zustand **`persist`** → localStorage).
+
+### Where is the catalog loaded and why import JSON instead of fetching?
+
+**`apps/web/src/lib/cloud-providers-catalog.ts`** imports the JSON **at build time**. That keeps the catalog **versioned with the repo**, avoids an extra runtime fetch, and guarantees types align with **`CloudProviderMeta`** in **`apps/web/src/types/models.ts`**. Vitest tests assert provider **`id`** values match the **`CloudProvider`** union in **`pipeline.ts`**.
+
+### How does the UI surface catalog fields?
+
+**`CloudProviderSelector`** renders a **radiogroup** of cards (logo, short name, pricing tier badge, description excerpt). The selected provider shows a **detail panel**: **bestFor**, **strengths**, grouped **nativeServices**, **ragStudioDefaults** (hints for later stages), and **compliance** chips — all straight from the JSON.
+
+### Why are there files under `apps/web/public/logos/`?
+
+The catalog references **`/logos/aws.svg`** (and similar). Those paths resolve from **`public/`** in Next.js. **P5-2** adds lightweight SVG marks so **`next/image`** does not 404; **`onError`** falls back to **shortName** initials if an asset is missing.
+
+### How does this connect to the backend?
+
+**`PipelineConfiguration.cloudProvider`** on the frontend mirrors **`CloudProvider`** in **`apps/api/app/schemas/pipeline.py`**. Saving or exporting the designer draft sends the same string the API expects (`aws`, `gcp`, `azure`, `multi-cloud`). Cost and export code already branch on **`cloud_provider`**.
+
+### Should selecting a cloud auto-change vector store defaults?
+
+**P5-2** intentionally **does not** overwrite **`stages.vectorStore`** automatically — users may have already tuned later stages; upcoming selectors (e.g. P5-6) can apply **`ragStudioDefaults`** explicitly. The UI **surfaces** defaults as **hints** only.
+
+### What accessibility choices were made?
+
+Cards use **`role="radiogroup"`** / **`role="radio"`** with **`aria-checked`**. Keyboard focus uses **`focus-visible`** ring styles on each card button.
+
+### What tests cover P5-2?
+
+**`apps/web/src/lib/__tests__/cloud-providers-catalog.test.ts`** — catalog shape, four providers, id narrowing, **`ragStudioDefaults`** presence.
+
+### How would you add a new cloud (e.g. Oracle) end-to-end?
+
+1. Extend **`CloudProvider`** in TS and Python enums if the product adds a fifth provider.  
+2. Append an entry to **`data/cloud-providers.json`** with the same **`id`**.  
+3. Add a logo under **`public/logos/`** if using **`logo`** paths.  
+4. Run **`npm run test`** and regression-test designer save/export.
+
+### What is the main limitation of P5-2 alone?
+
+Only the **cloud** stage is fully interactive; other stages still use **`DesignerStagePlaceholder`** until their P5 tasks ship. The **navigator** copy reflects that rollout.
+
+---
+
+## Phase 5 · P5-3 Data Ingestion Configuration
+
+### What does P5-3 deliver?
+
+An interactive **Data Ingestion** stage at **`/designer/ingestion`** that edits **`draft.stages.dataIngestion`** (`DataIngestionConfig`): **source type** (file upload, S3, GCS, Azure Blob, URL, database, API), **allowed file extensions**, **preprocessing** toggles (strip HTML, normalize whitespace, extract metadata) plus optional **custom rules** (one per line), **metadata** toggles (include source path, include page numbers) with optional **custom key/value metadata**, and **connection hints** stored in **`connectionConfig`** (non-secret placeholders only). Changes persist via **`useDesignerStore`** → **`updateStages`** with the same **Zustand `persist`** behavior as other Designer stages.
+
+### Where is the UI implemented?
+
+**`apps/web/src/components/designer/data-ingestion-configurator.tsx`** — exported as **`DataIngestionConfigurator`**. **`DesignerStagePlaceholder`** renders it when **`stageId === 'ingestion'`**, parallel to **`CloudProviderSelector`** on the cloud stage.
+
+### How does state merge without wiping nested fields?
+
+The component uses a **`mergeIngestion`** helper that starts from **`createDefaultPipelineConfiguration().stages.dataIngestion`** when missing and deep-merges **`preprocessing`** and **`metadata`**. **`patchIngestion`** composes partial updates so toggling one switch does not drop sibling keys.
+
+### Which schema validates the shape?
+
+Frontend **`DataIngestionConfigSchema`** in **`apps/web/src/lib/validators.ts`** (Zod) mirrors **`DataIngestionConfig`** in **`apps/web/src/types/pipeline.ts`** and aligns with **`DataIngestionConfigSchema`** in **`apps/api/app/schemas/pipeline.py`**. The UI runs **`safeParse`** and shows a compact issue list if the draft becomes invalid (for example after manual localStorage edits).
+
+### Why separate “connection hints” from secrets?
+
+**`connectionConfig`** is typed as **`Record<string, unknown>`** for flexibility; the UI labels it **reference only** and collects bucket names, regions, prefixes, hosts, etc. **Credentials belong in a secret manager at deploy time**, not in the committed pipeline JSON—consistent with export and Terraform generators treating config as **non-sensitive parameters**.
+
+### What happens when the user changes source type?
+
+**`connectionConfig`** is **reset to `{}`** so incompatible keys from the previous source do not leak into export payloads. The user re-enters hints for the new source.
+
+### How are custom metadata rows edited?
+
+Rows render from **`metadata.customMetadata`** (`Record<string, string>`). Users add/remove rows; empty keys are stripped on save so optional **`customMetadata`** can be omitted entirely.
+
+### Does P5-3 upload files or connect to live buckets?
+
+**No.** This task is **configuration only**. Actual ingestion execution remains in **Phase 2 `IngestionService`** and future worker/API flows; the Designer captures **intent** for YAML/Python/export.
+
+### What appears in the stage navigator for ingestion?
+
+**`StageNavigator`** shows a short **source hint** under **Data Ingestion** (for example **S3**, **GCS**, **Upload**) derived from **`draft.stages.dataIngestion.sourceType`**, similar to the cloud abbreviation for the first stage.
+
+### What accessibility patterns are used?
+
+Source selection uses **`role="radiogroup"`** / **`role="radio"`** with **`aria-checked`**. Switches use **`role="switch"`** / **`aria-checked`**. Sections have **`aria-labelledby`** where headings anchor the region.
+
+### What tests should be added or extended for P5-3?
+
+There is **no new Vitest file** in this change set; regression relies on **`tsc --noEmit`** and existing **`validators`** tests. A follow-up can add component tests for **`mergeIngestion`** or smoke-render **`DataIngestionConfigurator`**.
+
+### What remains placeholder after P5-3?
+
+Stages **chunking** through **review** still use the dashed placeholder until **P5-4+**. Only **Cloud Provider** and **Data Ingestion** are fully interactive.
+
+### How does ingestion config flow to exports?
+
+ **`draft.stages.dataIngestion`** is part of **`PipelineConfiguration`** consumed by **`yamlGenerator`**, **`pythonCodeGenerator`**, **`mermaidGenerator`**, and backend export services—same field names as today (**`dataIngestion`** in TS JSON).
+
+---
+
+## Phase 5 · P5-4 · Chunking Configuration
+
+### What problem does the Chunking stage solve in Designer mode?
+
+Users must choose **how documents are split** before embedding: strategy (fixed, recursive, semantic, etc.), **token budget** per chunk, **overlap** for boundary context, and optionally **recursive separators** and **chunk metadata**. **P5-4** surfaces those controls with catalog-backed guidance so the draft matches **`ChunkingConfig`** in **`pipeline.ts`** and validates with **`ChunkingConfigSchema`** (Zod).
+
+### Where does strategy metadata come from?
+
+**`data/chunking-strategies.json`** is imported at build time through **`apps/web/src/lib/chunking-strategies-catalog.ts`** (same pattern as **`cloud-providers-catalog.ts`**). The UI lists **name**, **description**, **complexity** badge, and **pros / cons / best for** from the catalog.
+
+### How does changing strategy update numbers?
+
+**`chunkingDefaultsFromCatalog(strategy)`** reads **`defaultConfig`** from the catalog entry, **clamps** **`chunkSize`** to **128–4096** and **`chunkOverlap`** to **0–1024** with **`overlap < chunkSize`**. Catalog entries with symbolic sizes (e.g. sentence counts) are lifted to at least **128** tokens so **`ChunkingConfigSchema`** stays valid. **Recursive character** also copies **`separators`** when present.
+
+### Which fields are persisted on the draft?
+
+**`updateStages({ chunking })`** merges into **`draft.stages.chunking`**: **`strategy`**, **`chunkSize`**, **`chunkOverlap`**, optional **`separators`**, optional **`metadata`** (**`includeSource`**, **`includePageNumber`**, **`customMetadata`**). Zustand **`persist`** saves to **localStorage** with the rest of the pipeline.
+
+### How are separators edited for recursive-character?
+
+A **textarea** shows **one separator string per line**. Inline control characters use escapes: **`\n`**, **`\t`**, **`\r`**, and **`\\`** for a literal backslash. This mirrors LangChain’s ordered separator list (large structures first).
+
+### Does the UI run chunking on documents?
+
+**No.** Configuration only. Actual splitting runs in backend **`ChunkingService`** (**P2-2**) when a build or export executes.
+
+### How does the sidebar summarize chunking?
+
+**`StageNavigator`** prints **`chunkingHint`**: short strategy label plus **`chunkSize/chunkOverlap`** (e.g. **Recursive · 512/50**).
+
+### How does this align with the API schema?
+
+Backend **`ChunkingConfigSchema`** in **`apps/api/app/schemas/pipeline.py`** includes **`strategy`**, **`chunk_size`**, **`chunk_overlap`**, **`separators`**. Frontend **`metadata`** on chunking is **designer/export enrichment**; confirm serializer paths when posting full pipeline JSON to the API.
+
+### What validation rules catch bad drafts?
+
+**`chunkOverlap < chunkSize`**, **chunk size** in **[128, 4096]**, **overlap** in **[0, 1024]**. The component surfaces **Zod** issues in an alert region.
+
+### What accessibility patterns are used?
+
+Strategy grid uses **`role="radiogroup"`** / **`role="radio"`** / **`aria-checked`**. Metadata toggles use **`role="switch"`**. Section headings use **`aria-labelledby`**.
+
+### What tests cover this task?
+
+**`apps/web/src/lib/__tests__/chunking-strategies-catalog.test.ts`** asserts catalog size, meta lookup, **clamping** behavior, and **recursive** separators. **`ChunkingConfigurator`** relies on existing **`ChunkingConfigSchema`** tests in **`validators`** tests.
+
+### What remains placeholder after P5-4?
+
+Stages **embedding** through **review** still ship as dashed placeholders until **P5-5+**. **Cloud**, **ingestion**, and **chunking** are interactive.
+
+---
+
+## Phase 5 · P5-5 · Embedding Model Selector
+
+### What problem does the Embedding stage solve in Designer mode?
+
+Users must pick **which embedding model** drives vectorization: **provider**, **output dimensions**, **context length**, and cost/quality tradeoffs. **P5-5** surfaces **`data/models/embeddings.json`** with **search** and **filters** so the draft’s **`EmbeddingConfig`** matches **`pipeline.ts`** and **`EmbeddingConfigSchema`** (Zod).
+
+### Where does embedding catalog metadata come from?
+
+**`data/models/embeddings.json`** is imported at build time through **`apps/web/src/lib/embeddings-catalog.ts`** (same pattern as **`chunking-strategies-catalog.ts`**). The UI lists **name**, **description**, **tier**, **quality**, **dimensions**, **speed**, and flags like **deprecated** and **open source**.
+
+### How does selecting a model update the draft?
+
+**`embeddingConfigFromCatalogEntry(modelId, { batchSize })`** returns **`model`**, **`provider`**, **`dimensions`**, **`maxTokens`**, and optional **`batchSize`**. **`EmbeddingConfigurator`** calls **`updateStages({ embedding: merge(...) })`** so nested **`EmbeddingConfig`** replaces fields consistently with the catalog row.
+
+### Which fields can users tune in the UI?
+
+**Model choice** (from catalog cards), **`batchSize`** (slider **1–2048**). **Dimensions**, **provider**, and **max tokens** follow the catalog entry for the selected **`model` id — they are shown read-only in the summary panel to avoid schema drift.
+
+### How does filtering work?
+
+Client-side **`useMemo`** over **`listEmbeddingModels()``**: optional **text search** (id, name, description, **bestFor**, languages), dropdowns for **provider**, **tier**, **quality**, **speed**, **open source** (all / yes / no), and a **hide deprecated** toggle (default on).
+
+### Does the UI call the embedding API?
+
+**No.** Configuration only. Actual embedding runs in backend **`EmbeddingService`** (**P2-3**) during builds or workers.
+
+### How does the sidebar summarize embedding?
+
+**`StageNavigator`** prints **`embeddingHint`**: short display **name** (from catalog) plus **`dimensions`** (e.g. **text-embedding-3-small · 1536d**).
+
+### Why extend **`ModelSpeed`** with **very-fast**?
+
+The catalog includes **`all-MiniLM-L6-v2`** with **`speed: "very-fast"`**. **`EmbeddingModel`** in **`types/models.ts`** aligns with catalog values so the filter and badges stay type-safe.
+
+### What validation rules apply?
+
+**`EmbeddingConfigSchema`**: **model** non-empty string, **provider** enum, **dimensions** **1–8192**, **batchSize** optional **1–2048**, **maxTokens** optional **≥ 1**. Invalid drafts show the same alert pattern as **Chunking**.
+
+### What accessibility patterns are used?
+
+Model grid uses **`role="radiogroup"`** / **`role="radio"`** / **`aria-checked`**. Search has a visible label via **`sr-only`**. Filter sections use **`aria-labelledby`**.
+
+### What tests cover this task?
+
+**`apps/web/src/lib/__tests__/embeddings-catalog.test.ts`** asserts model **count**, **lookup**, **`isEmbeddingProvider`**, **`embeddingConfigFromCatalogEntry`** mapping, and unknown ids. **`EmbeddingConfigurator`** relies on existing **`EmbeddingConfigSchema`** tests in **`validators`** tests.
+
+### What remains placeholder after P5-5?
+
+Stages **vector store** through **review** still use dashed placeholders until **P5-6+**. **Cloud**, **ingestion**, **chunking**, and **embedding** are interactive.
+
+---
+
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*
