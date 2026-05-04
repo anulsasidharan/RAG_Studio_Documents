@@ -60,14 +60,14 @@
 | 49 | Phase 5 | P5-14 · Template Gallery Page | `feature/p5-template-gallery` | Build template gallery and template-apply user flow. | ✅ done |
 |  | `Phase 6` | `Build LangGraph-based Autopilot backend agents to autonomously optimize RAG pipelines.` |  |  |  |
 | 50 | Phase 6 | P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | Set up shared agent state, tools, prompts, and LangGraph foundation. | ✅ done |
-| 51 | Phase 6 | P6-2 · Document Analyst Agent | `feature/p6-document-analyst-agent` | Build agent that analyzes document corpus and recommends chunking. | ⬜ pending |
-| 52 | Phase 6 | P6-3 · Chunking Optimizer Agent | `feature/p6-chunking-optimizer-agent` | Build agent to test chunking options and select best configuration. | ⬜ pending |
-| 53 | Phase 6 | P6-4 · Embedding Tester Agent | `feature/p6-embedding-tester-agent` | Build agent to benchmark embeddings by quality/speed/cost goals. | ⬜ pending |
-| 54 | Phase 6 | P6-5 · Retrieval Optimizer Agent | `feature/p6-retrieval-optimizer-agent` | Build agent to tune retrieval strategy and reranking decisions. | ⬜ pending |
-| 55 | Phase 6 | P6-6 · Evaluation Agent | `feature/p6-evaluation-agent` | Build agent to generate test sets, evaluate pipeline, and diagnose issues. | ⬜ pending |
-| 56 | Phase 6 | P6-7 · Deployment Agent | `feature/p6-deployment-agent` | Build packaging/deployment generation plus cloud deployer stubs. | ⬜ pending |
-| 57 | Phase 6 | P6-8 · Autopilot Orchestrator | `feature/p6-autopilot-orchestrator` | Build end-to-end LangGraph orchestration with iteration logic and progress events. | ⬜ pending |
-| 58 | Phase 6 | P6-9 · Autopilot API Endpoints | `feature/p6-autopilot-api` | Build APIs for starting, monitoring, streaming, canceling, and fetching builds. | ⬜ pending |
+| 51 | Phase 6 | P6-2 · Document Analyst Agent | `feature/p6-document-analyst-agent` | Build agent that analyzes document corpus and recommends chunking. | ✅ done |
+| 52 | Phase 6 | P6-3 · Chunking Optimizer Agent | `feature/p6-chunking-optimizer-agent` | Build agent to test chunking options and select best configuration. | ✅ done |
+| 53 | Phase 6 | P6-4 · Embedding Tester Agent | `feature/p6-embedding-tester-agent` | Build agent to benchmark embeddings by quality/speed/cost goals. | ✅ done |
+| 54 | Phase 6 | P6-5 · Retrieval Optimizer Agent | `feature/p6-retrieval-optimizer-agent` | Build agent to tune retrieval strategy and reranking decisions. | ✅ done |
+| 55 | Phase 6 | P6-6 · Evaluation Agent | `feature/p6-evaluation-agent` | Build agent to generate test sets, evaluate pipeline, and diagnose issues. | ✅ done |
+| 56 | Phase 6 | P6-7 · Deployment Agent | `feature/p6-deployment-agent` | Build packaging/deployment generation plus cloud deployer stubs. | ✅ done |
+| 57 | Phase 6 | P6-8 · Autopilot Orchestrator | `feature/p6-autopilot-orchestrator` | Build end-to-end LangGraph orchestration with iteration logic and progress events. | ✅ done |
+| 58 | Phase 6 | P6-9 · Autopilot API Endpoints | `feature/p6-autopilot-api` | Build APIs for starting, monitoring, streaming, canceling, and fetching builds. | ✅ done |
 |  | `Phase 7` | `Create real-time Autopilot frontend for build tracking, metrics, decisions, and results.` |  |  |  |
 | 59 | Phase 7 | P7-1 · Document Uploader | `feature/p7-document-uploader` | Build autopilot document upload UI and upload API path. | ⬜ pending |
 | 60 | Phase 7 | P7-2 · Requirements Form | `feature/p7-requirements-form` | Build requirements capture UI for targets, constraints, and optimization goals. | ⬜ pending |

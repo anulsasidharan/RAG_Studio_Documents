@@ -39,3 +39,11 @@
 | Task | Branch | Status |
 |------|--------|--------|
 | P6-1 · LangGraph Agent Infrastructure | `feature/p6-langgraph-infrastructure` | ✅ done |
+| P6-2 · Document Analyst Agent | `feature/p6-document-analyst-agent` | ✅ done |
+| P6-3 · Chunking Optimizer Agent | `feature/p6-chunking-optimizer-agent` | ✅ done |
+| P6-4 · Embedding Tester Agent | `feature/p6-embedding-tester-agent` | ✅ done |
+| P6-5 · Retrieval Optimizer Agent | `feature/p6-retrieval-optimizer-agent` | ✅ done |
+| P6-6 · Evaluation Agent | `feature/p6-evaluation-agent` | ✅ done |
+| P6-7 · Deployment Agent | `feature/p6-deployment-agent` | ✅ done |
+| P6-8 · Autopilot Orchestrator | `feature/p6-autopilot-orchestrator` | ✅ done |
+| P6-9 · Autopilot API Endpoints | `feature/p6-autopilot-api` | ✅ done |

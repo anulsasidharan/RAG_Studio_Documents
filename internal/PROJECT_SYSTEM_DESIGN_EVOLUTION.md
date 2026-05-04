@@ -442,3 +442,385 @@ stateDiagram-v2
 Before P6-1, Autopilot progress was **time-sliced stub updates** in **`run_pipeline_build`** with no shared agent memory. After P6-1, the codebase has a **single state schema** and a **compiled graph** pattern; subsequent phases add **real nodes** per stage and replace the stub with orchestrated execution.
 
 ---
+
+## Phase 6 — Autopilot LangGraph (after P6-2 · Document Analyst Agent)
+
+**P6-2** adds **`app/core/agents/document_analyst.py`**: deterministic **corpus summarisation** and **chunking recommendations** from optional **`requirements["corpus_profiles"]`** (or synthetic unknown profiles per **`document_id`**). The compiled graph is now **linear**: **`bootstrap_prepare` → `bootstrap_finalize` → `document_analyst` → END**. **`stage_outputs["analyze"]`** holds `corpus_summary`, `chunking_recommendation` (primary/alternate strategy ids, rationale, suggested parameters), and trace-friendly **`agent_trace`** entries. **`tools.py`** exposes **`document_corpus_analyze`**, **`summarize_corpus_profiles_json`**, and **`recommend_chunking_from_summary_json`** for future LLM tool-calling without duplicating rules.
+
+### P6-2 — Graph topology (bootstrap + analyze)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> [*]
+```
+
+### P6-2 — Data flow (profiles → stage_outputs)
+
+```mermaid
+flowchart LR
+  subgraph Inputs["Build state"]
+    R["requirements.corpus_profiles?"]
+    D[document_ids]
+  end
+  subgraph Analyst["document_analyst.py"]
+    S[build_corpus_summary]
+    REC[recommend_chunking]
+  end
+  subgraph Out["AutopilotGraphState"]
+    SO["stage_outputs.analyze"]
+    TR[agent_trace]
+  end
+  R --> S
+  D --> S
+  S --> REC
+  REC --> SO
+  REC --> TR
+```
+
+### Evolution note (P6-1 → P6-2)
+
+After P6-1 the graph only **validated LangGraph wiring**. After P6-2 the first **real Autopilot stage** (`analyze` in **`AUTOPILOT_STAGE_ORDER`**) produces **actionable machine output** for the Chunking Optimizer (P6-3) while remaining **LLM-free** for reproducibility.
+
+---
+
+## Phase 6 — Autopilot LangGraph (after P6-3 · Chunking Optimizer Agent)
+
+**P6-3** adds **`app/core/agents/chunking_optimizer.py`**: expands **`chunking_recommendation`** into deduped **`ChunkingConfig`** candidates (primary, alternates, and light **`optimize_for`** variants), runs **`ChunkingService.chunk`** on a **signal-aware synthetic corpus** (or **`requirements["chunking_sample_documents"]`**), scores chunks via **`ChunkQualityScorer`**, and writes **`stage_outputs["chunking"]`** (`selected`, `candidates_tried`, `alternatives_tested`). The compiled graph is **linear**: **`bootstrap_prepare` → `bootstrap_finalize` → `document_analyst` → `chunking_optimizer` → END**. Terminal **`current_stage`** is **`chunking_complete`**. Tooling adds **`chunking_optimizer_run`** for future LLM tool loops.
+
+### P6-3 — Graph topology (bootstrap + analyze + chunking)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> chunking_optimizer
+  chunking_optimizer --> [*]
+```
+
+### P6-3 — Data flow (analyze → chunk benchmarks → stage_outputs)
+
+```mermaid
+flowchart LR
+  subgraph Prior["From P6-2"]
+    A["stage_outputs.analyze"]
+  end
+  subgraph Opt["chunking_optimizer.py"]
+    C[build_optimizer_candidates]
+    S[ChunkingService.chunk]
+    Q[ChunkQualityScorer]
+  end
+  subgraph Out["AutopilotGraphState"]
+    CH["stage_outputs.chunking"]
+    TR[agent_trace]
+  end
+  A --> C
+  C --> S
+  S --> Q
+  Q --> CH
+  C --> TR
+```
+
+### Evolution note (P6-2 → P6-3)
+
+After P6-2, Autopilot produced **recommendations only**. After P6-3, the same build run **executes real chunkers** on a bounded corpus and selects a **measured** configuration, bridging **heuristic analyst output** to **service-level validation** before embedding work in P6-4.
+
+---
+
+## Phase 6 — Autopilot LangGraph (after P6-4 · Embedding Tester Agent)
+
+**P6-4** adds **`app/core/agents/embedding_tester.py`**: loads **`data/models/embeddings.json`**, builds a bounded list of **`EmbeddingConfig`** candidates (pipeline `stages.embedding`, optional **`requirements["embedding_candidate_models"]`**, tier-aware defaults from **`optimize_for`**), derives benchmark strings by re-chunking the **same synthetic corpus** as P6-3 with the **winning chunking config** (or **`requirements["embedding_sample_texts"]`**), runs **`EmbeddingBenchmarker.benchmark`**, merges **live throughput/latency** with **catalog MTEB and list-price** signals into a **weighted composite** (`quality` / `latency` / `cost` / `balanced`), and writes **`stage_outputs["embedding"]`**. The compiled bootstrap graph is **linear** through **`embedding_tester`**; terminal **`current_stage`** is **`embedding_complete`**. Tooling adds **`embedding_tester_run`** (chunking + analyze + requirements JSON, optional pipeline JSON).
+
+### P6-4 — Graph topology (bootstrap + analyze + chunking + embedding)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> chunking_optimizer
+  chunking_optimizer --> embedding_tester
+  embedding_tester --> [*]
+```
+
+### P6-4 — Data flow (chunking winner + catalog → benchmarks → stage_outputs)
+
+```mermaid
+flowchart LR
+  subgraph Prior["From P6-2 / P6-3"]
+    A["stage_outputs.analyze"]
+    CH["stage_outputs.chunking"]
+  end
+  subgraph EmbMod["embedding_tester.py"]
+    CAT[data/models/embeddings.json]
+    T[ChunkingService texts]
+    B[EmbeddingBenchmarker]
+  end
+  subgraph Out["AutopilotGraphState"]
+    E["stage_outputs.embedding"]
+    TR[agent_trace]
+  end
+  A --> T
+  CH --> T
+  CAT --> B
+  T --> B
+  B --> E
+  B --> TR
+```
+
+### Evolution note (P6-3 → P6-4)
+
+After P6-3, Autopilot had a **measured chunking triple** but only **static** embedding intent from the Designer draft. After P6-4, the run **exercises real embedders** on representative chunk text (when providers succeed), ranks candidates with **explicit trade-offs** against **`optimize_for`**, and emits a **catalog-aligned** `provider` / `model` / `dimensions` choice for downstream retrieval tuning in **P6-5**.
+
+---
+
+## Phase 6 — Autopilot LangGraph (after P6-5 · Retrieval Optimizer Agent)
+
+**P6-5** adds **`app/core/agents/retrieval_optimizer.py`**: builds **chunk texts** consistent with P6-4, generates a bounded set of **retrieval + rerank** candidates (pipeline **`stages.retrieval`** / **`reranking`** when present, else catalog of **similarity / hybrid / MMR / multi-query / ensemble**), scores them with **BM25-oracle MRR** plus a **latency proxy**, and writes **`stage_outputs["retrieval"]`**. The bootstrap graph is **linear** through **`retrieval_optimizer`**; terminal **`current_stage`** is **`retrieval_complete`**. Tooling adds **`retrieval_optimizer_run`**.
+
+### P6-5 — Graph topology (bootstrap + analyze + chunking + embedding + retrieval)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> chunking_optimizer
+  chunking_optimizer --> embedding_tester
+  embedding_tester --> retrieval_optimizer
+  retrieval_optimizer --> [*]
+```
+
+### P6-5 — Data flow (chunk texts + offline scores → retrieval decision)
+
+```mermaid
+flowchart LR
+  subgraph Prior["From P6-2 … P6-4"]
+    A["stage_outputs.analyze"]
+    CH["stage_outputs.chunking"]
+    E["stage_outputs.embedding"]
+  end
+  subgraph RMod["retrieval_optimizer.py"]
+    T[Chunk texts corpus]
+    S[BM25 + dense proxy + fusion]
+  end
+  subgraph Out["AutopilotGraphState"]
+    R["stage_outputs.retrieval"]
+    TR[agent_trace]
+  end
+  A --> T
+  CH --> T
+  E --> S
+  T --> S
+  S --> R
+  S --> TR
+```
+
+### Evolution note (P6-4 → P6-5)
+
+After P6-4, Autopilot had a **chosen embedding model** but retrieval was still **Designer defaults**. After P6-5, the run emits a **measured retrieval configuration** (strategy, **top_k**, hybrid/MMR knobs, rerank on/off) aligned to **`optimize_for`**, ready for **generation / evaluation** agents in P6-6+.
+
+---
+
+## Phase 6 — Autopilot LangGraph (after P6-6 · Evaluation Agent)
+
+**P6-6** adds **`app/core/agents/evaluation_agent.py`**: reuses **P6-5** chunk corpus and **selected retrieval** ranking, builds **per-query** rows with an **extractive** simulated answer, computes **deterministic metric proxies**, runs **`analyze_failures`**, compares aggregates to **`requirements["target_metrics"]`**, and writes **`stage_outputs["evaluation"]`**. The bootstrap graph ends at **`evaluation_agent` → END**; terminal **`current_stage`** is **`evaluation_complete`**. Tooling adds **`evaluation_agent_run`**.
+
+### P6-6 — Graph topology (bootstrap … retrieval → evaluation)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> chunking_optimizer
+  chunking_optimizer --> embedding_tester
+  embedding_tester --> retrieval_optimizer
+  retrieval_optimizer --> evaluation_agent
+  evaluation_agent --> [*]
+```
+
+### P6-6 — Data flow (retrieval decision + chunks → eval payload)
+
+```mermaid
+flowchart LR
+  subgraph Prior["From P6-2 … P6-5"]
+    A["stage_outputs.analyze"]
+    CH["stage_outputs.chunking"]
+    R["stage_outputs.retrieval"]
+  end
+  subgraph EMod["evaluation_agent.py"]
+    Q[Eval queries + BM25 oracle]
+    S[Lexical proxies + failure_analysis]
+  end
+  subgraph Out["AutopilotGraphState"]
+    EV["stage_outputs.evaluation"]
+    TR[agent_trace]
+  end
+  A --> Q
+  CH --> Q
+  R --> Q
+  Q --> S
+  S --> EV
+  S --> TR
+```
+
+### Evolution note (P6-5 → P6-6)
+
+After P6-5, Autopilot could **rank** chunks but had **no closed-loop quality signal** for the composed stack. After P6-6, each run emits a **structured evaluation payload** (metrics, **meets_targets**, **failure_analysis**) suitable for **orchestrator iteration** and UI explainability, while **full RAGAS** remains on the **async evaluation** path (**P2-7** / jobs) for production-grade scoring.
+
+---
+
+## Phase 6 — Autopilot LangGraph (after P6-7 · Deployment Agent)
+
+**P6-7** adds **`app/core/agents/deployment_agent.py`**: after evaluation, the graph emits **container/IaC text** (Docker Compose, Kubernetes multi-doc YAML, Terraform HCL) either by **reusing P4 export generators** on a valid **`PipelineConfigurationSchema`** or by **fallback sketches** parameterized from **`stage_outputs`** (retrieval / embedding / chunking selections). **`cloud_deployers`** holds per-provider **dry-run** metadata (**`apply_gated: true`**) so Autopilot never performs cloud apply. **`AUTOPILOT_STAGE_ORDER`** now ends with **`deployment`**, aligning the Celery **`run_pipeline_build`** stub loop with the LangGraph stage list. Tooling adds **`deployment_agent_run`**.
+
+### P6-7 — Graph topology (bootstrap … evaluation → deployment)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> chunking_optimizer
+  chunking_optimizer --> embedding_tester
+  embedding_tester --> retrieval_optimizer
+  retrieval_optimizer --> evaluation_agent
+  evaluation_agent --> deployment_agent
+  deployment_agent --> [*]
+```
+
+### P6-7 — Data flow (stages + optional Designer config → artefacts)
+
+```mermaid
+flowchart LR
+  subgraph Prior["From P6-2 … P6-6 + optional pipeline_config"]
+    EV["stage_outputs.evaluation"]
+    R["stage_outputs.retrieval"]
+    E["stage_outputs.embedding"]
+    CH["stage_outputs.chunking"]
+    PC["AutopilotGraphState.pipeline_config"]
+  end
+  subgraph DMod["deployment_agent.py"]
+    V[Validate PipelineConfigurationSchema?]
+    G[generate_docker_compose / k8s / terraform]
+    F[Fallback sketches from selected knobs]
+  end
+  subgraph Out["AutopilotGraphState"]
+    DEP["stage_outputs.deployment"]
+    TR[agent_trace]
+  end
+  EV --> V
+  R --> V
+  E --> V
+  CH --> V
+  PC --> V
+  V -->|valid| G
+  V -->|invalid or missing| F
+  G --> DEP
+  F --> DEP
+  DEP --> TR
+```
+
+### Evolution note (P6-6 → P6-7)
+
+After P6-6, Autopilot could **score** the stack but could not yet **package** it for operators. After P6-7, each run carries **reviewable deployment artefacts** and explicit **gated** cloud next-steps, bridging Autopilot output toward **Designer export** parity and future **deployment APIs** without introducing unmanaged side effects in the graph.
+
+---
+
+## Phase 6 snapshot — P6-8 · Autopilot Orchestrator (evaluation gate + retries + progress)
+
+**P6-8** turns the former **linear** bootstrap graph into a **closed-loop orchestrator**: after **`evaluation_agent`**, an **`orchestration_gate`** node reads **`meets_targets`**, **`requirements.max_iterations`**, and **`evaluation_pass_index`**. If targets are unmet and retries remain, the graph loops back to **`chunking_optimizer`** (re-using the prior **analyze** payload); otherwise it continues to **`deployment_agent`**. Every specialist trace row is merged with **`kind: autopilot_progress`** fields (stage, 0–100 **progress**, detail) from **`app.core.agents.progress`**, suitable for **SSE** consumers in **P6-9**. **`AutopilotGraphState`** gains **`evaluation_pass_index`** (incremented by the gate on retry). **`jobs.run_pipeline_build`** now invokes **`invoke_autopilot_orchestrator`**, persists **stages**, **messages**, **progress**, compact **`result.stage_outputs`**, and marks **`generation`** in **`AUTOPILOT_STAGE_ORDER`** as a **Designer-led** placeholder so API keys stay aligned with the worker stub matrix.
+
+### P6-8 — LangGraph topology (gate + retry loop)
+
+```mermaid
+stateDiagram-v2
+  [*] --> bootstrap_prepare
+  bootstrap_prepare --> bootstrap_finalize
+  bootstrap_finalize --> document_analyst
+  document_analyst --> chunking_optimizer
+  chunking_optimizer --> embedding_tester
+  embedding_tester --> retrieval_optimizer
+  retrieval_optimizer --> evaluation_agent
+  evaluation_agent --> orchestration_gate
+  orchestration_gate --> chunking_optimizer: retry_chunking
+  orchestration_gate --> deployment_agent: deploy
+  deployment_agent --> [*]
+```
+
+### P6-8 — Worker ↔ graph persistence
+
+```mermaid
+flowchart LR
+  subgraph Celery["Celery worker"]
+    T[run_pipeline_build]
+  end
+  subgraph Graph["LangGraph orchestrator"]
+    G[invoke_autopilot_orchestrator]
+  end
+  subgraph DB["PostgreSQL"]
+    B[autopilot_builds row]
+  end
+  T -->|initial_autopilot_graph_state| G
+  G -->|agent_trace + stage_outputs + messages| T
+  T -->|stages, progress, result, messages| B
+```
+
+### Evolution note (P6-7 → P6-8)
+
+Before P6-8, a build always ran **one forward pass** regardless of metric gaps. After P6-8, **target-driven iteration** is explicit in the graph, **progress-shaped trace rows** exist for streaming UIs, and the **Celery build task** executes the **same** LangGraph the API will expose—eliminating the prior **pure stub** stage loop.
+
+---
+
+## Phase 6 snapshot — P6-9 · Autopilot API Endpoints (FastAPI façade over Celery + LangGraph)
+
+**P6-9** exposes **first-class HTTP routes** under **`/api/autopilot`** so clients no longer have to manually create DB rows and call **`/api/jobs/build/{id}`**. **`POST /api/autopilot/build`** validates **`StartBuildRequest`**, checks **project ownership**, inserts **`autopilot_builds`** with **initial per-stage `pending` maps** aligned to **`AUTOPILOT_STAGE_ORDER`**, enqueues **`run_pipeline_build`**, and stores **`_celery_task_id`** beside user **`requirements`**. **`GET`** polling and **`GET …/stream`** surface **`BuildStatusResponse`** (camelCase JSON in SSE). **`POST …/cancel`** marks **`cancelled`** in PostgreSQL and **best-effort** **`revoke`**s the Celery task (tolerates broker outages). **`GET …/result`** returns the **raw** orchestrator JSON artifact. The worker gained **cooperative cancellation** checks so **`cancelled`** is not overwritten by a late **`complete`**.
+
+### P6-9 — Request path (enqueue)
+
+```mermaid
+sequenceDiagram
+  participant C as Client (Designer / P7 UI)
+  participant API as FastAPI /api/autopilot
+  participant PG as PostgreSQL
+  participant R as Redis broker
+  participant W as Celery worker
+
+  C->>API: POST /build (projectId, requirements, documentIds)
+  API->>PG: INSERT autopilot_builds (pending, stages, messages)
+  API->>R: run_pipeline_build.delay(build_id)
+  API->>PG: UPDATE requirements._celery_task_id
+  API-->>C: 202 StartBuildResponse
+  R->>W: deliver task
+  W->>PG: status running → complete / failed / skip if cancelled
+```
+
+### P6-9 — Observe path (poll + SSE)
+
+```mermaid
+flowchart LR
+  subgraph Client
+    P[Poller]
+    S[SSE reader]
+  end
+  subgraph API["FastAPI"]
+    G[GET /build/id]
+    ST[GET /build/id/stream]
+  end
+  PG[(autopilot_builds)]
+  P --> G
+  G --> PG
+  S --> ST
+  ST -->|"new session each tick"| PG
+```
+
+### Evolution note (P6-8 → P6-9)
+
+Before P6-9, operators could enqueue **`run_pipeline_build`** only via the **generic jobs router** after hand-crafting persistence. After P6-9, **Autopilot is a cohesive HTTP vertical**: one **`POST`** starts a tracked build with **correct `requirements` hydration** for the orchestrator, **cancel** is a product feature (not a Celery admin task), and **SSE** matches the **polling schema** so Phase 7 can swap transports without redesigning payloads.
+
+---
+

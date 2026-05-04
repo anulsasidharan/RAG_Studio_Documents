@@ -4640,12 +4640,356 @@ LangGraph merges node outputs per key. Without a reducer, the last write would *
 
 ### How do you test a graph without an LLM?
 
-The bootstrap nodes return **`AIMessage`** and dict updates only — **no model call**. Tests invoke **`invoke_autopilot_bootstrap`** with and without **`MemorySaver`** to validate compilation, reducers, and terminal **`current_stage == bootstrap_complete`**.
+The bootstrap and document-analyst nodes return **`AIMessage`** and dict updates only — **no model call**. Tests invoke **`invoke_autopilot_bootstrap`** with and without **`MemorySaver`** to validate compilation, reducers, and terminal **`current_stage == "analyze_complete"`** (P6-2 onward) plus populated **`stage_outputs["analyze"]`**.
 
 ### What is the next task after P6-1?
 
-**P6-2 · Document Analyst Agent** — first specialist node that reads corpus metadata and recommends chunking strategies.
+**P6-2 · Document Analyst Agent** is implemented: the compiled graph runs **bootstrap → document analyst**, and **`stage_outputs["analyze"]`** carries corpus summary plus chunking recommendations. The next milestone is **P6-3 · Chunking Optimizer Agent**.
+
+---
+
+## Phase 6 · P6-2 · Document Analyst Agent
+
+### What problem does the Document Analyst solve?
+
+Autopilot must choose **chunking** before embeddings. The analyst turns **corpus-level signals** (file types, rough size, markdown/code/tabular hints from optional **`corpus_profiles`**) into a **catalog-aligned strategy id** (`fixed-size`, `recursive-character`, `semantic`, `markdown-header`, `code-aware`, `paragraph-based`) plus **suggested chunk size / overlap**, so downstream agents (P6-3) start from an evidence-based default instead of a random preset.
+
+### Where does `corpus_profiles` come from?
+
+**Not invented in the graph.** Ingestion / upload flows (future P7 / worker wiring) should attach a JSON-serializable list under **`requirements["corpus_profiles"]`** after documents are parsed. If it is missing, the analyst **synthesizes** one profile per **`document_id`** with **`file_type: "unknown"`**, which still completes the stage but produces a **conservative** recommendation (`recursive-character`) and a trace note.
+
+### Why keep heuristics in pure Python instead of only an LLM?
+
+- **Deterministic CI** — same inputs yield the same **`primary_strategy`**, so unit tests guard regressions.  
+- **No API key** required for the default Autopilot path.  
+- An LLM can still be added later as a **refinement node** that consumes `stage_outputs["analyze"]`.
+
+### How does `recommend_chunking` choose a strategy?
+
+Priority-ordered rules on **`corpus_summary["signals"]`** and **`optimize_for`**: **code-heavy** → `code-aware`; **markdown structure** → `markdown-header`; **tabular / CSV** → `fixed-size`; **quality** + multiple non-trivial docs → `semantic`; **latency** → `fixed-size`; else **`recursive-character`** as the general default. Alternates are returned for the Chunking Optimizer to search around.
+
+### What does the LangGraph node emit?
+
+**`document_analyst`** returns updates: **`current_stage: "analyze_complete"`**, **`stage_outputs["analyze"]`** (`status`, `corpus_summary`, `chunking_recommendation`, `profile_count`), **`agent_trace`** with `event: "document_analyst"`, and an **`AIMessage`** summarising counts, dominant types, and the primary strategy (Markdown bold on strategy name for UI parsers).
+
+### Which LangChain tools exist for P6-2?
+
+| Tool | Role |
+|------|------|
+| `document_corpus_analyze` | Full analyst JSON from `document_ids_json` + `requirements_json`. |
+| `summarize_corpus_profiles_json` | Returns **`corpus_summary`** only from a profiles array. |
+| `recommend_chunking_from_summary_json` | Returns **`chunking_recommendation`** from a summary + requirements. |
+
+They mirror the same logic as the graph node so a future **tool-calling LLM** can replan without duplicating business rules.
+
+### Interview trap: does the graph still end at `bootstrap_complete`?
+
+**No after P6-2.** The terminal **`current_stage`** is **`analyze_complete`**. Bootstrap remains **`stage_outputs["bootstrap"]`** with `next: "document_analyst"`.
+
+### How do tests cover the analyst without real PDFs?
+
+**`tests/test_core/test_document_analyst.py`** builds synthetic **`corpus_profiles`** and asserts strategy ids. **`test_agents_langgraph.py`** asserts **`stage_outputs["analyze"]["status"] == "complete"`** and extended **`agent_trace`** length after **`invoke_autopilot_bootstrap`**.
+
+### What is the next task after P6-2?
+
+**P6-3 · Chunking Optimizer Agent** — search / evaluate alternative chunking parameters around the analyst’s recommendation.
+
+---
+
+## Phase 6 · P6-3 · Chunking Optimizer Agent
+
+### What problem does the Chunking Optimizer solve?
+
+The analyst proposes **one primary** strategy plus **alternates**, but real chunk quality depends on **tokenizer boundaries**, **overlap**, and **strategy-specific behaviour**. The optimizer **materialises candidate `ChunkingConfig` rows**, runs the production **`ChunkingService`** on a **small benchmark corpus**, scores outputs with **`ChunkQualityScorer`**, and picks the **highest composite score** so Autopilot exports a defensible `chunk_size` / `chunk_overlap` / `strategy` triple—not only a rule-based guess.
+
+### Why benchmark on synthetic text instead of full uploads?
+
+The LangGraph state carries **`document_ids` and optional `corpus_profiles`**, not full file bytes. Until ingestion streams text into the worker, the optimizer builds (or accepts) **short representative documents**: default **signal-aware synthetic prose/markdown/code/tabular snippets**, or optional **`requirements["chunking_sample_documents"]`** for tests and future wiring that passes real snippets from storage.
+
+### How is the composite score defined?
+
+Per candidate, chunks are scored with **`ChunkQualityScorer`** (density, sentence completeness, proximity to target `chunk_size`). The mean **overall** metric is adjusted by **`optimize_for`**: **latency** penalises high chunk counts; **cost** penalises many chunks (embedding calls); **quality** gives a small bonus for reasonable fragmentation; **balanced** uses the mean alone.
+
+### What happens if a strategy fails at runtime (e.g. semantic embeddings)?
+
+Each candidate is wrapped in **try/except**; failures become **`candidates_tried[].error`** strings and **do not crash** the graph. If **every** candidate fails, **`stage_outputs["chunking"].status`** is **`failed`** with **`reason: all_chunking_benchmarks_failed`**.
+
+### How does the graph topology change after P6-3?
+
+**Linear:** `bootstrap_prepare` → `bootstrap_finalize` → `document_analyst` → **`chunking_optimizer`** → END. The terminal **`current_stage`** is **`chunking_complete`** (success path) even when chunking payload records an internal failure, so orchestrators can rely on a single stage pointer.
+
+### What keys does `stage_outputs["chunking"]` contain on success?
+
+| Key | Role |
+|-----|------|
+| `status` | `complete` or `failed` |
+| `selected` | `strategy`, `chunk_size`, `chunk_overlap`, `composite_score`, `rationale` |
+| `candidates_tried` | List of per-candidate metrics (`chunk_count`, `composite_score`, optional `error`) |
+| `alternatives_tested` | Strategy ids of non-winning successful runs (aligns with API “alternatives tested” wording) |
+| `benchmark_document_count` | How many LangChain documents were chunked |
+
+### Which LangChain tool was added for P6-3?
+
+**`chunking_optimizer_run(analyze_json, requirements_json)`** — accepts the **same JSON shape** as `stage_outputs["analyze"]` plus requirements; returns **optimizer JSON** for future tool-calling LLMs.
+
+### Interview trap: is `current_stage` still `analyze_complete` after the full bootstrap graph?
+
+**No after P6-3.** After a successful end-to-end invoke, **`current_stage` is `chunking_complete`**. The analyst node still sets **`analyze_complete` internally before merge**, but the **last write wins** on the scalar field.
+
+### How do tests cover the optimizer without large models?
+
+**`tests/test_core/test_chunking_optimizer.py`** exercises candidate deduplication, JSON tool errors, and deterministic benchmarks with **`chunking_sample_documents`**. **`test_agents_langgraph.py`** asserts **`stage_outputs["chunking"]["status"] == "complete"`** and extended **`agent_trace`** after **`invoke_autopilot_bootstrap`**.
+
+### What is the next task after P6-3?
+
+**P6-4 · Embedding Tester Agent** — benchmark embedding models against cost/latency/quality goals.
+
+---
+
+## Phase 6 · P6-4 · Embedding Tester Agent
+
+### What problem does the Embedding Tester solve?
+
+Chunking output fixes **text boundaries**, but **retrieval quality, bill, and tail latency** still depend on the **embedding model**. The tester **materialises catalog-backed `EmbeddingConfig` rows**, embeds a **small text sample** aligned to the winning chunker, measures **throughput and per-text latency** via **`EmbeddingBenchmarker`**, and fuses those signals with **catalog MTEB scores and `costPer1MTokens`** so Autopilot picks a **single provider/model** (plus rationale) before retrieval optimisation.
+
+### Where do benchmark texts come from?
+
+By default the service **re-chunks** the same **signal-aware synthetic corpus** used in P6-3 using the **selected** `strategy` / `chunk_size` / `chunk_overlap`. Tests and future workers can inject **`requirements["embedding_sample_texts"]`** (plain string list) to avoid provider calls or stabilise CI.
+
+### How is the winner chosen if live benchmarks only return some providers?
+
+**`EmbeddingBenchmarker`** drops failing configs (missing API keys, unsupported models). The agent builds **`candidates_tried`** including **error rows** for configs that never returned vectors. If **every** config fails, **`stage_outputs["embedding"].status`** is **`failed`** with **`all_embedding_benchmarks_failed`**. Otherwise the **highest composite score** among successful runs wins; weights depend on **`optimize_for`** (`quality`, `latency`, `cost`, `balanced`).
+
+### How does the LangGraph topology change after P6-4?
+
+**Linear extension:** `chunking_optimizer` → **`embedding_tester`** → END. Terminal **`current_stage`** is **`embedding_complete`**.
+
+### What keys does `stage_outputs["embedding"]` expose on success?
+
+| Key | Role |
+|-----|------|
+| `status` | `complete` or `failed` |
+| `selected` | `provider`, `model`, `dimensions`, throughput/latency, `composite_score`, `rationale` |
+| `candidates_tried` | Per-run metrics or `error` markers for skipped providers |
+| `benchmark_text_count` | Number of strings embedded in the timed run |
+
+### Which LangChain tool was added for P6-4?
+
+**`embedding_tester_run(chunking_json, analyze_json, requirements_json, pipeline_config_json?)`** — mirrors the graph inputs so a future **tool-calling LLM** can rerun or explain the stage without invoking the full graph.
+
+### Interview trap: does CI call OpenAI for every pytest graph invoke?
+
+**No.** **`tests/test_core/test_agents_langgraph.py`** patches **`EmbeddingBenchmarker`** inside **`embedding_tester`** with stub **`BenchmarkResult`** rows so the graph and tool smoke tests stay **offline and deterministic**, while production code paths still call real embedders when keys are present.
+
+### What is the next task after P6-4?
+
+**P6-5 · Retrieval Optimizer Agent** — tune retrieval mode, top-k, hybrid weights, and reranking.
 
 ---
 
 *Append new `## Phase … · …` sections at the end for future tasks; keep all prior sections intact.*
+
+---
+
+## Phase 6 · P6-5 · Retrieval Optimizer Agent
+
+### What does the Retrieval Optimizer add to the Autopilot graph?
+
+**P6-5** extends the compiled bootstrap graph with a **`retrieval_optimizer`** node after **`embedding_tester`**. The terminal **`current_stage`** becomes **`retrieval_complete`**, and **`stage_outputs["retrieval"]`** holds the winning **strategy**, **top_k**, optional **hybrid α / fusion**, **MMR λ**, and **reranking** flags plus **`candidates_tried`** and a short **rationale**.
+
+### Why benchmark retrieval without calling `RetrievalService` or a vector DB?
+
+Autopilot runs **before** a project may have a populated index. The optimizer therefore reuses the **same chunk texts** as P6-4 (synthetic corpus + winning chunker, or **`requirements["retrieval_sample_texts"]`**), scores **hashing-vector “dense”** similarity and **BM25** lexically, and applies the same **fusion patterns** as production (**RRF**, **weighted** hybrid, **MMR**, **multi-query** RRF, **ensemble** RRF). That yields a **deterministic, CI-safe** trade-off surface; live Qdrant/PG paths remain in **P2-5** for runtime.
+
+### How is a “good” retrieval setting measured offline?
+
+For each evaluation query, the code treats the **BM25 argmax chunk** as a lexical oracle and computes **mean reciprocal rank (MRR)** of that chunk in the candidate ranking. That score is normalised across candidates and fused with a **latency proxy** (heavier strategies and higher **top_k** cost more) using **`optimize_for`** (`quality`, `latency`, `cost`, `balanced`) — analogous to the embedding tester’s composite.
+
+### What happens if chunking yields only one chunk?
+
+The optimizer **duplicates** the single chunk with a small suffix so BM25 and ranking logic always have **≥2** documents, avoiding degenerate benchmarks while still reflecting the real chunk content.
+
+### Which LangChain tool exposes P6-5?
+
+**`retrieval_optimizer_run(embedding_json, chunking_json, analyze_json, requirements_json, pipeline_config_json?)`** returns JSON aligned with **`stage_outputs["retrieval"]`**, so a future tool-calling LLM can re-run or explain the stage.
+
+### Interview trap: does the graph still end at `embedding_complete` after P6-5?
+
+**No.** Successful runs end at **`retrieval_complete`**. The embedding node still sets **`embedding_complete`** on that hop, but the graph’s **final** `current_stage` after **`retrieval_optimizer`** is **`retrieval_complete`**.
+
+### What is the next task after P6-5?
+
+**P6-6 · Evaluation Agent** — synthetic or curated test sets, pipeline evaluation, and failure diagnosis.
+
+---
+
+## Phase 6 · P6-6 · Evaluation Agent
+
+### What does the Evaluation Agent add to the Autopilot graph?
+
+**P6-6** appends an **`evaluation_agent`** node after **`retrieval_optimizer`**. The terminal **`current_stage`** is **`evaluation_complete`**, and **`stage_outputs["evaluation"]`** holds **offline lexical proxies** for **faithfulness**, **answer_relevance**, **context_precision**, and **context_recall**, plus **`failure_analysis`** (from **`analyze_failures`**), **`meets_targets`**, optional **`target_gaps`** vs **`requirements["target_metrics"]`**, **`per_row_scores`**, and a short **`rationale`**.
+
+### Why use proxies instead of calling the P2-7 RAGAS engine inside the graph?
+
+Autopilot’s LangGraph bootstrap must stay **deterministic and CI-safe** without API keys. **RAGAS** (real LLM judges) runs asynchronously via **Celery** **`run_evaluation`** when persisted **`EvaluationExample`** rows exist. The agent reuses **P6-5 chunk texts** and the **selected retrieval ranking** to fabricate **extractive answers** and score **token-overlap** stand-ins that correlate with “did retrieval surface the oracle chunk?” — enough to drive **`failure_analysis`** and **target gating** before deployment agents.
+
+### How are test rows constructed?
+
+For each query from **`_build_eval_queries`** (or **`requirements["retrieval_eval_queries"]`**), the code sets **oracle** = **BM25 argmax** chunk, **contexts** = top-**k** chunks from **`_rank_indices_for_candidate`** using the **winning retrieval profile**, and **answer** = a trimmed excerpt from the **rank-1** chunk. That yields one **per-row** dict with scores the failure analyzer already understands.
+
+### Which LangChain tool exposes P6-6?
+
+**`evaluation_agent_run(retrieval_json, chunking_json, analyze_json, requirements_json, pipeline_config_json?)`** — mirrors graph inputs so a **tool-calling LLM** can rerun or explain evaluation without the full graph.
+
+### Interview trap: does `meets_targets` default to true when no targets are set?
+
+**Yes.** If **`requirements["target_metrics"]`** omits thresholds, nothing fails the gate; **`target_gaps`** stays empty. Tight **`faithfulness`** / **`answer_relevance`** / **`context_precision`** / **`context_recall`** values make **`meets_targets`** false when any proxy falls short.
+
+### What is the next task after P6-6?
+
+**P6-7 · Deployment Agent** — packaging/deployment artefacts and cloud deployer stubs.
+
+---
+
+## Phase 6 · P6-7 · Deployment Agent
+
+### What does the Deployment Agent add to the Autopilot graph?
+
+**P6-7** appends a **`deployment_agent`** node after **`evaluation_agent`**. The terminal **`current_stage`** is **`deployment_complete`**, and **`stage_outputs["deployment"]`** holds **`artefacts`** (`docker_compose`, `kubernetes_manifest`, `terraform_stub` strings), **`cloud_deployers`** (AWS/GCP/Azure **stub** records with **`apply_gated: true`**), **`synthesized_from`** (`pipeline_config` vs **`stage_outputs_fallback`**), optional **`warnings`**, **`rationale`**, and **`operator_notes`**.
+
+### When does the agent use real P4 export generators vs fallback sketches?
+
+If **`pipeline_config`** in graph state **`model_validate`s** as **`PipelineConfigurationSchema`**, the agent calls **`generate_docker_compose`**, **`generate_kubernetes`**, and **`generate_terraform`** from **`app.services.export_generators`**. If validation fails or config is absent, it emits **compact fallback** YAML/HCL derived from **`stage_outputs`** retrieval/embedding/chunking **`selected`** fields so CI still gets deterministic text.
+
+### Why are cloud deployers “stubs”?
+
+**Terraform apply**, **`kubectl apply`**, and cloud control-plane calls require **credentials, approvals, and network** access that must not run inside an unreviewed Autopilot graph tick. The payload therefore lists **`would_run`** commands and documentation links while **`apply_gated`** stays **true** until an operator promotes artefacts through your org’s pipeline (**P8-4** / **P12**).
+
+### Does deployment require evaluation to succeed?
+
+**No.** The graph always runs **after** the evaluation node, but **`run_deployment_agent`** only needs **complete** retrieval, embedding, and chunking stages. If **`evaluation.status` ≠ `complete`**, the payload adds a **warning** and still produces artefacts using the upstream selections.
+
+### Which LangChain tool exposes P6-7?
+
+**`deployment_agent_run(evaluation_json, retrieval_json, chunking_json, embedding_json, requirements_json, pipeline_config_json, build_id, project_id)`** — JSON in/out aligned with **`stage_outputs["deployment"]`**.
+
+### What changed in `AUTOPILOT_STAGE_ORDER` for worker stub builds?
+
+**`deployment`** is appended after **`evaluation`**, so **`jobs.run_pipeline_build`**’s Celery stub iterates **one more** stage key for progress messages until the real orchestrator replaces the stub.
+
+### Interview trap: will Autopilot accidentally provision my AWS account?
+
+**Not from this agent.** There are **no boto3 / google / azure SDK calls** here—only text generation and structured **“would run”** hints. Real provisioning belongs behind **explicit** deployment APIs and credentials (**Phase 8 / 12**).
+
+### What is the next task after P6-7?
+
+**P6-8 · Autopilot Orchestrator** — end-to-end LangGraph orchestration with iteration logic and progress events.
+
+---
+
+## Phase 6 · P6-8 · Autopilot Orchestrator
+
+### What problem does P6-8 solve that P6-7 left open?
+
+**P6-7** ended in a **strictly linear** LangGraph: **analyze → … → evaluation → deployment** with **no feedback loop** if **`meets_targets`** was false, and **no machine-readable progress** beyond ad-hoc trace dicts. **P6-8** adds an **`orchestration_gate`** after **evaluation**, **optional retries** back to **chunking** (bounded by **`requirements.max_iterations`**), **`evaluation_pass_index`** in state, **`autopilot_progress`** fields on trace rows, and wires **`run_pipeline_build`** to **`invoke_autopilot_orchestrator`** so workers run the **same** graph the API will stream (**P6-9**).
+
+### How does the orchestration gate decide “retry” vs “deploy”?
+
+The gate calls **`_orchestration_decision`**: **deploy** if evaluation **`status` ≠ `complete`**, if **`meets_targets`** is true, or if **`evaluation_pass_index` ≥ `max_iterations` − 1** (so **`max_iterations`** counts full optimisation attempts including the first). Otherwise it chooses **retry**, increments **`evaluation_pass_index`**, and LangGraph routes **`retry_chunking` → `chunking_optimizer`**. **Document analyst** is **not** re-run on retry (the prior **`stage_outputs["analyze"]`** still feeds chunking).
+
+### Why loop back to chunking instead of retrieval or embedding only?
+
+Chunking is the **first tunable knob** that changes downstream **embedding benchmarks**, **retrieval** rankings, and **evaluation** proxies in this codebase; looping there maximises **signal per retry** without multiplying **corpus profile** work. A future subgraph could branch to **embedding-only** retries if product requirements demand it.
+
+### What is `evaluation_pass_index` and how does it differ from `iteration`?
+
+**`evaluation_pass_index`** (P6-8) counts **post-evaluation retry scheduling**—the gate increments it when it chooses **retry**. **`iteration`** is still bumped once in **`bootstrap_finalize`** for backward compatibility with earlier tests and any UI that probed **`iteration == 1`** after a single forward pass.
+
+### What shape do “progress events” take for SSE?
+
+Every major **`agent_trace`** row merges **`progress_trace_fields`** so entries include **`kind: "autopilot_progress"`**, **`progress`** (0–100 using a **stage ladder** plus a **small bump per pass**), **`stage`**, **`detail`**, **`build_id`**, and **`evaluation_pass_index`**. Consumers can filter **`kind == "autopilot_progress"`** or surface **`event == "orchestration_gate"`** for orchestrator-specific lines.
+
+### How does `jobs.run_pipeline_build` read document IDs and base pipeline config?
+
+It copies **`row.requirements`** from the DB: **`document_ids`** must appear as **`requirements["document_ids"]`** (list of strings), and optional **`requirements["base_config"]`** (object) becomes **`pipeline_config`** in **`initial_autopilot_graph_state`**. Until **P6-9** persists these fields on enqueue, builds may run with **empty** `document_ids`—the document analyst still returns **minimal profiles**.
+
+### Why does the worker mark the `generation` stage complete without a generation agent node?
+
+**`AUTOPILOT_STAGE_ORDER`** still lists **`generation`** for **API contract parity** with **`BuildStatusResponse.stages`**. The P6-8 graph does **not** run a separate generation optimiser; the worker injects a **short message** so polling clients do not see a **perpetually pending** stage.
+
+### What public entry points alias the orchestrator?
+
+**`compile_autopilot_orchestrator_graph`** and **`invoke_autopilot_orchestrator`** are thin aliases over the **same** compiled graph as **`compile_autopilot_bootstrap_graph`** / **`invoke_autopilot_bootstrap`** (names kept for **import stability**).
+
+### Interview trap: can retries run forever?
+
+**No.** **`max_iterations`** is clamped to **1…10**; the gate **always** routes to **deployment** once **`evaluation_pass_index` ≥ `max_iterations` − 1** or evaluation is incomplete / targets met.
+
+### What is the next task after P6-8?
+
+**P6-9 · Autopilot API Endpoints** — HTTP APIs to start, poll, **SSE stream**, cancel, and fetch build results against the orchestrator.
+
+---
+
+## Phase 6 · P6-9 · Autopilot API Endpoints
+
+### Which HTTP routes implement the Autopilot build lifecycle?
+
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/api/autopilot/build` | Create an `autopilot_builds` row (pending), persist **`requirements`** + **`document_ids`** + optional **`base_config`**, enqueue **`jobs.run_pipeline_build`**, store **`_celery_task_id`** — returns **`202 Accepted`**. |
+| `GET` | `/api/autopilot/build/{id}` | Poll **`BuildStatusResponse`** (stages, messages, progress, optional typed **`result`**). |
+| `GET` | `/api/autopilot/build/{id}/stream` | **Server-Sent Events**: repeated **`data:`** lines with the same JSON shape as the poll endpoint until status is terminal (**`complete`**, **`failed`**, **`cancelled`**). |
+| `POST` | `/api/autopilot/build/{id}/cancel` | **`celery_app.control.revoke`** (best-effort, broker optional in dev), then mark row **`cancelled`**. |
+| `GET` | `/api/autopilot/build/{id}/result` | Returns the **opaque** JSON blob from **`AutopilotBuild.result`** (orchestrator / worker output), **`404`** if nothing persisted yet. |
+
+### How is multi-tenant ownership enforced on every call?
+
+Handlers load the build through **`AutopilotBuildService.get_owned`**: an SQLAlchemy **`select`** joins **`autopilot_builds` → `projects`**, filters **`projects.user_id`** to the resolved **`X-User-ID`** (or configured default) and **`projects.deleted_at IS NULL`**. Missing rows surface as **`404`**, not **`403`**, to avoid leaking build existence across users.
+
+### Where exactly are `document_ids` and `base_config` stored for the worker?
+
+They are merged into the same **`requirements`** JSON column written at **`POST /build`**: **`document_ids`** as a string list and optional **`base_config`** as a dict. **`run_pipeline_build`** already read **`requirements["document_ids"]`** and **`requirements["base_config"]`** for **`initial_autopilot_graph_state`** — P6-9 makes that path live for real enqueue traffic.
+
+### Why stash the Celery AsyncResult id under `_celery_task_id` inside JSON?
+
+Avoids a DB migration while still giving **cancel** a concrete task handle. The worker ignores keys it does not read; the API treats **`_celery_task_id`** as internal metadata.
+
+### Why wrap `celery_app.control.revoke` in a try/except instead of letting it fail?
+
+**Revoke** talks to the **broker** (Redis). In **CI** or **offline dev** the broker may be down; the product decision here is to **still mark the build cancelled in PostgreSQL** and log a warning so operators see intent even if the worker cannot be signalled immediately.
+
+### How does the Celery task cooperate with a cancelled build?
+
+**Before** flipping **`pending → running`**, **`run_pipeline_build`** returns immediately if the row is already **`cancelled`**. **Before** writing the success **`complete`** state, it re-reads the row and aborts if **`cancelled`** (so a late cancel during graph execution is not overwritten by **`complete`**). The exception path also avoids clobbering **`cancelled`** with **`failed`**.
+
+### What is the difference between `GET …/build/{id}` `result` and `GET …/build/{id}/result`?
+
+**`BuildStatusResponse.result`** is **`BuildResultSchema | null`** — only populated when the stored JSON fully validates as the **normalised** “final pipeline + metrics + decisions” contract. Until then it stays **`null`**. The **`/result`** route returns **`BuildArtifactResultResponse`** (arbitrary dict) so Phase 7 UIs and operators can inspect **`stage_outputs`**, flags, and other orchestrator dumps without pretending the shape is final-user-facing.
+
+### Why does the SSE handler open a fresh async session each second instead of reusing `Depends(get_db_session)`?
+
+A stream can run for **minutes**. Holding one request-scoped session across **`asyncio.sleep`** ties up a pool slot and keeps an implicit transaction boundary ambiguous. Short **`async with session_factory()`** blocks per tick are easier to reason about for read-only polling.
+
+### What HTTP code does a successful enqueue return, and why not `200`?
+
+**`202 Accepted`** — the server accepted responsibility to **process later**; the heavy LangGraph work is not done inside the request/response cycle.
+
+### What happens if you cancel the same build twice?
+
+The first **`POST /cancel`** succeeds (**`200`**) with **`status: "cancelled"`**. The second returns **`409 Conflict`** because the build is already in a terminal cancelled state (same for **`complete`**).
+
+### Does the Autopilot API implement document upload (`POST /api/autopilot/upload`)?
+
+**Not in P6-9.** The **`StartBuildRequest`** schema still documents MinIO object IDs for when **P7-1** adds upload; clients may pass **placeholder** IDs until storage is wired.
+
+### Interview trap: will SSE events be camelCase like the REST of the API?
+
+Yes — SSE payloads call **`model_dump(mode="json", by_alias=True)`** so keys match the OpenAPI / frontend **`camelCase`** convention.
+
+### What is the next task after P6-9?
+
+**Phase 7 · P7-1 · Document Uploader** (and subsequent P7 UI) — consume these endpoints from the browser with real uploads, live progress, and dashboards.
+
+---
+
