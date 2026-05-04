@@ -4993,3 +4993,287 @@ Yes — SSE payloads call **`model_dump(mode="json", by_alias=True)`** so keys m
 
 ---
 
+## Phase 7 · P7-1 · Document Uploader
+
+### Which route stores corpus bytes, and what does it return?
+
+**`POST /api/autopilot/upload`** — **multipart/form-data** with **`projectId`** (camelCase form field) and one or more **`files`** parts. On success it returns **`201 Created`** with **`{ "documents": [ … ] }`**. Each element includes **`objectId`** (the MinIO object key), **`originalFilename`**, **`sizeBytes`**, and optional **`contentType`**. The client passes **`objectId`** strings verbatim as **`documentIds`** when calling **`POST /api/autopilot/build`**.
+
+### How is tenant isolation enforced on upload?
+
+The handler parses **`projectId`** as a UUID, loads **`projects`** by primary key, and requires **`project.user_id`** to equal the resolved **`X-User-ID`** (or configured default) and **`deleted_at IS NULL`**. Otherwise it responds **`404 Project not found`** — same “existence hiding” posture as **`AutopilotBuildService.get_owned`**.
+
+### Why multipart instead of JSON with base64 payloads?
+
+**Efficiency and ergonomics**: browsers already expose **`File`** / **`FormData`** with streaming-friendly boundaries; base64 would inflate size (~33%) and force the API to decode large strings inside JSON. Multipart matches nginx **`client_max_body_size`** tuning and standard object-storage tooling.
+
+### Where are objects written in MinIO, and why include `user_id` and `project_id` in the key?
+
+Keys look like **`autopilot/{user_id}/{project_id}/{uuid}_{sanitized_original}`**. The prefix prevents accidental cross-tenant reads when future download or ingestion jobs list by prefix, makes lifecycle policies easier, and keeps human operators able to correlate objects with owning projects without a separate index.
+
+### How are unsafe filenames and unsupported types handled?
+
+The original basename is stripped of directories, reduced to **`[a-zA-Z0-9._-]`**, and truncated. Extensions must belong to an allow-list (**`.pdf`**, **`.txt`**, **`.md`**, **`.markdown`**, **`.csv`**, **`.json`**, **`.html`**, **`.htm`**, **`.docx`**). Violations raise **`400`** with a clear message before any bytes hit object storage.
+
+### What happens if MinIO is down?
+
+The synchronous MinIO client runs inside **`asyncio.to_thread`** so the event loop stays responsive. Connection or **`S3Error`** failures bubble as **`AutopilotStorageUnavailableError`**, mapped to **`503 Service Unavailable`** with a plain-text **`detail`** string for operators.
+
+### Why lazy-import the MinIO client inside helper functions?
+
+Some developer machines (e.g. **CPython 3.13** without wheels for every transitive dependency) still need **`import app.main`** for unit tests. Deferring **`import minio`** until an upload actually executes lets **`pytest`** import the FastAPI app and patch **`upload_blobs_sync`** without requiring a successful **`pip install minio`** in that environment. Production containers still install **`minio`** from **`requirements.txt`**.
+
+### How does the Next.js client reach `/api/autopilot/upload` without CORS pain?
+
+The browser uses **same-origin** `fetch('/api/...')`; **`next.config.js`** rewrites **`/api/*`** to the FastAPI origin, mirroring the existing **`apiClient`** pattern. **`postFormData`** deliberately omits a manual **`Content-Type`** header so the runtime sets **`multipart/form-data; boundary=…`**.
+
+### What state does the Zustand autopilot store persist for uploads?
+
+**`selectedBackendProjectId`**, **`uploadedDocuments`** (each with **`objectId`**, **`originalName`**, **`sizeBytes`**), plus existing wizard fields. The storage key bumped to **`rag-studio-autopilot-v2-p7`** to avoid deserialising obsolete **`documents: string[]`**-only shapes.
+
+### How does the UI obtain selectable `projectId` values?
+
+It **`GET /api/projects/?page=1&page_size=50`** (trailing slash avoids **`307`** redirect issues behind the rewrite proxy, same lesson as the template gallery). If the list is empty, copy links users to **Templates** or **Projects** to create a server-backed row first.
+
+### What automated tests cover upload?
+
+**`tests/test_autopilot_router.py`** patches **`upload_blobs_sync`** to avoid a real MinIO daemon, asserts **`201`** plus JSON shape for happy path, and asserts **`404`** when **`X-User-ID`** does not own the target project.
+
+### Interview trap: are `documentIds` validated to exist in MinIO before enqueue?
+
+**Not in P7-1.** **`StartBuildRequest`** still only checks **non-empty** IDs; verifying object existence (or re-hydrating corpus profiles) is a natural follow-up when ingestion agents read bytes from storage rather than placeholders.
+
+### What is the next task after P7-1?
+
+**P7-2 · Requirements Form** — capture **`BuildRequirementsSchema`** fields in the browser before wiring **`POST /api/autopilot/build`**.
+
+---
+
+## Phase 7 · P7-2 · Requirements Form
+
+### What TypeScript shape represents Autopilot requirements in the browser?
+
+**`BuildRequirements`** in **`apps/web/src/types/autopilot.ts`**: **`targetMetrics`** (optional **faithfulness**, **answerRelevance**, **contextPrecision**, **contextRecall** each **0–1**), optional **`cloudProvider`**, optional **`budgetConstraint`** (USD per **1K** queries), optional **`latencyRequirement`** (ms), **`optimizeFor`** (**quality** | **cost** | **latency** | **balanced**), and **`maxIterations`**. The Zustand store persists **`requirements`** beside uploads so a later **Start build** button can read one coherent payload.
+
+### How does the UI stay aligned with backend validation?
+
+The form uses **`BuildRequirementsSchema`** (**Zod** in **`apps/web/src/lib/validators.ts`**) on **Validate**, mirroring the intent of the FastAPI **`BuildRequirementsSchema`** in **`apps/api/app/schemas/autopilot.py`**. **`maxIterations`** is capped at **10** on both sides (orchestrator graph also clamps iteration caps). Optional numeric fields parse on blur; non-finite input is dropped so the store does not retain **`NaN`**.
+
+### Why camelCase in TS types when Pydantic uses snake_case?
+
+The API layer serialises with **aliases** so JSON over the wire is **camelCase** (**`targetMetrics`**, **`optimizeFor`**, …). The Python schema uses **snake_case** field names as the internal representation. The frontend types match the **wire** JSON contract consumers see in **`fetch`**.
+
+### How does `optimize_for` influence agents?
+
+Chunking and related optimisers read **`requirements["optimize_for"]`** (after normalisation) when scoring candidates—for example preferring cheaper chunking configs when **`cost`** is selected. The requirements form writes **`optimizeFor`** into Zustand so the eventual **`POST /api/autopilot/build`** body matches what **`graph.py`** and optimizer modules already expect in **`state["requirements"]`**.
+
+### Why offer an optional cloud provider on the requirements form?
+
+**`cloudProvider`** hints packaging and defaults for the deployment stage and keeps Autopilot aligned with Designer’s **cloud catalog** (**`data/cloud-providers.json`** via **`listCloudProviders()`**). It is optional: **`No preference`** omits the field so the orchestrator is not over-constrained.
+
+### What interview trap exists around “budget” units?
+
+**`budgetConstraint`** is documented as **maximum cost per 1K queries in USD**—not per token and not monthly cap. Interviewees should state assumptions clearly if product later adds different billing dimensions.
+
+### How do you reset corrupted local state?
+
+**Reset defaults** calls **`createDefaultRequirements()`** (exported from **`autopilot-store.ts`**) and **`setRequirements`**, re-syncing controlled text fields for budget and latency. Users can also clear **localStorage** key **`rag-studio-autopilot-v2-p7`** if a future schema bump requires it.
+
+### What is the next task after P7-2?
+
+**P7-3 · Build Progress Monitor** — subscribe to **`GET /api/autopilot/build/{id}/stream`** (or poll **`GET …/build/{id}`**) and render live progress from **`BuildStatusResponse`**.
+
+---
+
+## Phase 7 · P7-3 · Build Progress Monitor
+
+### How does the frontend subscribe to Autopilot build progress?
+
+**`useAutopilotBuildSubscription(activeBuildId)`** opens a browser **`EventSource`** against same-origin **`GET /api/autopilot/build/{id}/stream`**. The FastAPI handler emits **`data: { …BuildStatusResponse… }\n\n`** about once per second until the row reaches a terminal **`status`** (**`complete`**, **`failed`**, **`cancelled`**). The hook parses JSON, merges into **`useAutopilotStore.builds`** via **`upsertBuild`**, and preserves **`input`** (documents, requirements, optional **`baseConfig`**) from the optimistic row created when **`POST /api/autopilot/build`** returns.
+
+### Why add a polling fallback if SSE already exists?
+
+**`EventSource`** has no custom headers (fine here because **`X-User-ID`** defaults server-side), but **corporate proxies**, **HTTP/2 intermediaries**, and **dev tooling** sometimes drop or buffer SSE. On **`onerror`** (or JSON parse failure from a truncated chunk), the hook **closes** the stream and starts **`setInterval`** polling **`GET /api/autopilot/build/{id}`** every **2s** until terminal, so the UI still converges without a manual refresh.
+
+### How do you avoid resetting user-owned fields when each SSE tick arrives?
+
+**`parseBuildStatusPayload`** returns **`Omit<AutopilotBuild,'input'>`**. **`mergeBuildFromServer(prev, server)`** spreads server fields but keeps **`prev.input`** when present. **`BuildProgressMonitor`** seeds **`input`** immediately after **`202 Accepted`** from **`POST /api/autopilot/build`** so the first SSE snapshot cannot wipe document or requirement context.
+
+### What does `BuildStatusResponse` contain for the progress bar and stage list?
+
+**`progress`** (0–100), **`currentStage`** (string, e.g. **`queued`**, **`orchestrate`**, agent keys), **`iteration`**, per-stage **`stages`** map (**`pending` \| `running` \| `complete` \| `failed`** with optional **`message`**), **`messages`** (timestamped agent lines), optional typed **`result`**, optional **`error`**, and timestamps. The UI orders stages using **`AUTOPILOT_STAGE_ORDER`** aligned with **`app.core.agents.state.AUTOPILOT_STAGE_ORDER`**.
+
+### Why can `EventSource` use a relative `/api/...` URL in Next.js?
+
+The browser targets the **Next.js origin**; **`next.config.js`** **`rewrites`** proxy **`/api/*`** to FastAPI, avoiding **CORS** and mismatched hosts (**`127.0.0.1`** vs **`localhost`**). Server components are not involved—the hook is **`'use client'`**.
+
+### How does cancel interact with the worker?
+
+**`POST /api/autopilot/build/{id}/cancel`** revokes the stored **Celery** task id (when present) and marks the DB row **`cancelled`**. The UI re-fetches status once so Zustand reflects the terminal state even if the client had fallen back to polling.
+
+### Interview trap: does every SSE payload include the full `messages` array?
+
+**Yes** in the current API—the handler dumps the whole **`build_status_response(row)`** each tick. The Zustand persist layer already **truncates** long **`messages`** arrays (**`MAX_PERSISTED_MESSAGES`**) on **`upsertBuild`** to keep **localStorage** bounded; **P7-4** surfaces the retained slice in **`AgentActivityFeed`** with filters and export.
+
+### How is `Start build` validated before POST?
+
+The monitor requires a **selected project**, at least one **uploaded object id**, and **`BuildRequirementsSchema.safeParse`** (same intent as the Requirements panel’s **Validate**). Payload keys are **camelCase** (**`projectId`**, **`documentIds`**, **`requirements`**, optional **`baseConfig`**) matching **`RAGBaseModel`** aliases.
+
+### What is the next task after P7-3?
+
+**P7-4 · Agent Activity Feed** (implemented): full log stream, filters, and export on top of the **`messages`** array. Then **P7-5 · Metrics Dashboard**.
+
+---
+
+## Phase 7 · P7-4 · Agent Activity Feed
+
+### Where does the agent activity feed get its data?
+
+**`useAutopilotStore`**: the feed reads **`builds[activeBuildId].messages`**, the same **`BuildMessage[]`** merged from **`parseBuildStatusPayload`** during SSE or polling (**`useAutopilotBuildSubscription`** in **`BuildProgressMonitor`**). No second network subscription is required as long as the Autopilot page mounts the progress monitor (or any hook that keeps the store updated).
+
+### Why implement filtering on the client instead of a new API?
+
+**`BuildStatusResponse`** already ships the **`messages`** array on each tick; duplicating query parameters on the server would add latency and contract surface for little gain while message counts remain bounded (**`MAX_PERSISTED_MESSAGES`** in **`autopilot-store.ts`**). Client filters (**text**, **agent**, **type** toggles) operate on the in-memory slice instantly and match export semantics (**filtered** rows only).
+
+### How do JSON and text export differ?
+
+**JSON** export from **`AgentActivityFeed`** writes a structured object: **`buildId`**, **`buildStatus`**, **`exportedAt`**, **`filters`** (active query / agent / included types), **`messageCount`**, and **`messages`** (the visible rows). **Text** export flattens each line to **`[timestamp] Agent · TYPE — text`** with a short header—suitable for pasting into tickets or **`grep`**.
+
+### What happens to filters when the user switches the active build?
+
+An **`useEffect`** keyed on **`activeBuildId`** resets **search**, **agent** (**All agents**), and **all type toggles on**, so a filter from build A does not hide messages on build B.
+
+### Why auto-scroll only when the user is near the bottom?
+
+The feed keeps **`stickBottomRef`** in sync with **`scrollHeight - scrollTop - clientHeight`**. New SSE appends only auto-scroll if the user was already near the end (terminal-style behaviour). If they scrolled up to read history, the viewport does not jump.
+
+### How are message types styled?
+
+Rows use a **left border** and light background tint by **`BuildMessage.type`** (**`info`**, **`success`**, **`warning`**, **`error`**) so operators can scan failures without reading full text.
+
+### Interview trap: does export include messages truncated on the server?
+
+**Exports reflect whatever is in the store** after **`trimBuildForPersistence`**. If the backend ever sends more than the cap, the UI would still only export the truncated tail until persist rules change—interviewees should mention this consistency trade-off.
+
+### What is the next task after P7-4?
+
+**P7-5 · Metrics Dashboard** (implemented): live charts and SLO cards fed by **`dashboardMetrics`** on **`BuildStatusResponse`**, plus client-sampled progress trends. Next: **P7-6 · Decision Explainer & Results**.
+
+---
+
+## Phase 7 · P7-5 · Metrics Dashboard
+
+### Why add `dashboard_metrics` to the build status API instead of only charting in the browser?
+
+The worker persists the LangGraph orchestrator blob on **`AutopilotBuild.result`**, but that JSON is **not** a valid **`BuildResultSchema`** (it wraps **`stage_outputs`**, flags, and metadata), so **`result`** stays **`null`** on **`GET /api/autopilot/build/{id}`**. **`extract_dashboard_metrics`** reads **`result.stage_outputs`** and returns a **small typed projection** (**`AutopilotDashboardMetricsSchema`**) that is safe to chart: evaluation proxies, embedding bench rows, retrieval summary. The UI avoids re-implementing orchestrator parsing rules and stays stable when the opaque artifact evolves.
+
+### How does the metrics dashboard get live updates?
+
+The same **SSE / polling** path as P7-3: **`useAutopilotBuildSubscription`** merges each **`BuildStatusResponse`** into Zustand. **`parseBuildStatusPayload`** maps **`dashboardMetrics`** (camelCase) onto **`AutopilotBuild.dashboardMetrics`**. The **`MetricsDashboard`** component reads **`builds[activeBuildId]`**; no extra HTTP calls.
+
+### What is client-sampled “progress trend”?
+
+Between API ticks the dashboard appends a **local** point when **`progress`**, **`iteration`**, or **`updatedAt`** changes, capped (~240 samples). That yields a **line chart** even before evaluation metrics exist, and mirrors operator perception of motion during long orchestrations.
+
+### How are quality bars interpreted?
+
+**`dashboardMetrics.quality`** carries **faithfulness**, **answer_relevance**, **context_precision**, **context_recall**, optional **avg_latency_ms**, and **meets_targets** from the evaluation agent payload. The UI builds horizontal bars **observed vs target** using **`build.input.requirements.targetMetrics`** (merged earlier from the seed row). Missing targets render as **`null`** bars so Recharts skips the grey “target” segment for that metric.
+
+### How does the latency section relate to requirements?
+
+Embedding candidates expose **`latencyMs`** per tried model. The chart draws an optional **`ReferenceLine`** at **`latencyRequirement`** when the user set an SLO. A separate card compares **eval proxy latency** (**`avg_latency_ms`**) to the same SLO.
+
+### What about “cost” if there is no dollar metric in `dashboard_metrics`?
+
+**`budget_constraint`** from requirements is shown as a **budget cap card** (USD / 1K queries). There is no per-query dollar estimate in the v1 snapshot; interviewees should distinguish **SLO capture** from **full cost analytics** (later phases such as P11-3).
+
+### Interview trap: will `dashboard_metrics` always be non-null after `complete`?
+
+Only when **`stage_outputs`** contains extractable sections. If the orchestrator shape changes and validation fails, **`_optional_dashboard_metrics`** returns **`null`**—the UI must tolerate **empty chart placeholders**.
+
+### What is the next task after P7-5?
+
+**P7-6 · Decision Explainer & Results** — explainability and final result visualization screens (implemented: see Phase 7 · P7-6 section below).
+
+---
+
+## Phase 7 · P7-6 · Decision Explainer & Results
+
+### Why was `GET /api/autopilot/build/{id}` returning `result: null` even after a successful build?
+
+The Celery worker persisted an **opaque orchestrator blob** (`autopilot_graph`, `stage_outputs`, …) that was **not** a `BuildResultSchema`. FastAPI’s `_optional_typed_result` only accepts payloads that validate as **`BuildResultSchema`**, so **`result` stayed `null`**. **P7-6** adds **`compose_build_result_payload`** (`app/services/autopilot_build_result.py`), invoked at the end of **`run_pipeline_build`**, which **merges** a typed **`config`**, **`metrics`**, **`decisions`**, optional **`deployment`**, and **`total_iterations`** onto the same JSON row. Existing diagnostic keys remain for debugging.
+
+### How is the synthesised `PipelineConfiguration` built?
+
+The compositor starts from a **minimal default shell** (valid catalog IDs) or from **`requirements.base_config`** when it validates as **`PipelineConfigurationSchema`**. It then **patches** `stages.chunking`, `stages.embedding`, `stages.retrieval`, and optional **`reranking`** from **`stage_outputs`** “selected” payloads, and stamps **`metadata.source = autopilot`** plus **`metadata.build_id`**.
+
+### What appears in `decisions` for the Decision Explainer UI?
+
+**Chunking** — strategy, chunk size, analyst/optimiser **rationale**, and **alternatives_tested**. **Embedding** — winning model id, rationale, and a **benchmark_results** table (score clamped 0–1, latency ms, cost per 1M tokens when present). **Retrieval** — strategy, `top_k`, reranking flag, rationale, and a small **performance** map (e.g. MRR, composite score). **Generation** — carried from the merged pipeline (the LangGraph does not mutate generation in v1).
+
+### Where do final evaluation numbers on the Results Summary come from?
+
+**`metrics`** maps **`stage_outputs.evaluation.metrics`** (faithfulness, answer relevance, context precision/recall, optional avg latency). If evaluation is incomplete, the compositor falls back to **neutral 0.5 proxies** so the schema still validates — operators should treat those as **placeholders**, not measured RAGAS.
+
+### What does the “Open in Designer” button do?
+
+It calls **`useDesignerStore.loadPipeline(result.config)`**, patches **`metadata.source`** / **`buildId`**, and navigates to **`/designer/review?source=autopilot`** so the user can inspect the same pipeline JSON in the Designer review shell.
+
+### Why show an amber banner when status is `complete` but `result` is still missing?
+
+**Older builds** (pre-P7-6 worker) never received a normalised **`BuildResult`**. The **`ResultsSummary`** component explains that and asks the user to **run a new build**; charts from **P7-5** may still work via **`dashboard_metrics`** + **`stage_outputs`**.
+
+### How does JSON download differ from `GET …/build/{id}/result`?
+
+**Download** serialises the **already-fetched** typed **`build.result`** object in the browser (camelCase). **`GET /api/autopilot/build/{id}/result`** returns the **raw persisted orchestrator artifact** (opaque). Interviewees should distinguish **client convenience export** from **server artifact introspection**.
+
+### Interview trap: will `deployment` always reflect a live cloud URL?
+
+**No.** When **`stage_outputs.deployment.status == "complete"`**, the compositor attaches a **stub** **`DeploymentInfoSchema`** (local stub host, `docker_image_tag`, `status: deployed`). Real cloud endpoints belong in later phases (e.g. P12).
+
+### What tests protect the compositor?
+
+**`tests/test_services/test_autopilot_build_result.py`** exercises a **happy-path** `BuildResultSchema` round-trip and a **chunking-failed** scenario (chunking decision omitted, defaults still produce a valid config).
+
+### What is the next task after P7-6?
+
+**P7-7 · Autopilot Entry & History Pages** (implemented; see Phase 7 · P7-7 section below). After Phase 7, **Phase 8** covers Designer ↔ Autopilot handoff APIs and flows.
+
+---
+
+## Phase 7 · P7-7 · Autopilot Entry & History Pages
+
+### Why split Autopilot across `/autopilot`, `/autopilot/new`, `/autopilot/history`, and `/autopilot/projects`?
+
+A **single long page** mixed marketing entry, the upload wizard, and observability widgets. **P7-7** introduces an **`AutopilotShell`** layout (sub-nav) so users land on an **overview** with clear CTAs, run the **wizard** on **`/autopilot/new`**, inspect **server-backed history** on **`/autopilot/history`**, and manage **backend project selection** on **`/autopilot/projects`** without scrolling past unrelated panels.
+
+### What does `GET /api/autopilot/builds` provide that the Zustand store does not?
+
+The store persists **this browser’s** merged poll/SSE snapshots. **`GET /api/autopilot/builds`** returns **authoritative rows** from **`autopilot_builds`** joined to **`projects`** (name + ownership), with **pagination** and optional **`project_id`** filter. History UI uses it so a fresh session or another device still sees past runs.
+
+### How is user isolation enforced on the list endpoint?
+
+`AutopilotBuildService.list_for_user` joins **`AutopilotBuild` → `Project`** and filters **`Project.user_id == request user`** and **`deleted_at IS NULL`**. Optional **`project_id`** first calls **`_require_owned_project`** so users cannot probe other tenants’ UUIDs.
+
+### What is the deep-link pattern from History back into the wizard?
+
+Each row links to **`/autopilot/new?build={id}&project={projectId}`**. **`AutopilotNewPageBody`** sets **`activeBuildId`** and **`selectedBackendProjectId`**, then **GETs `/api/autopilot/build/{id}`** once if the build is missing locally, **`parseBuildStatusPayload` + `mergeBuildFromServer`**, so **`useAutopilotBuildSubscription`** can attach SSE/poll immediately.
+
+### Why keep `/projects` and add `/autopilot/projects`?
+
+**`/projects`** is the **local-first** project store UI from earlier phases. **`/autopilot/projects`** lists **`GET /api/projects`** rows and toggles **`selectedBackendProjectId`** in **`useAutopilotStore`** — the same id **multipart upload** and **start build** require — so Autopilot operators have a focused path without redesigning the legacy page.
+
+### Interview trap: does `GET /api/autopilot/builds` return full `messages` / `stages`?
+
+**No.** List items are **`AutopilotBuildListItemSchema`** (status, progress, stage label, timestamps, error). Full stage maps and logs remain on **`GET /api/autopilot/build/{id}`** to keep history tables fast.
+
+### What tests cover the new API?
+
+**`tests/test_autopilot_router.py`** adds **`test_autopilot_list_builds`** (filtered by **`project_id`**, asserts the created **`buildId`** row) and **`test_autopilot_list_builds_filter_unknown_project`** (404). **`_create_project`** uses **`POST /api/projects`** without a trailing slash to match FastAPI’s registered path.
+
+### What is the next task after P7-7?
+
+**Phase 8 · P8-1 · Designer → Autopilot Handoff** — wire “Optimize this” style flows so Designer configs seed Autopilot requirements without manual re-entry.
+
+---
+

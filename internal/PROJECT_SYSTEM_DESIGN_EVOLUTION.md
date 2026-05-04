@@ -398,6 +398,8 @@ flowchart LR
 
 Long-form Phase 5 diagrams: **[PROJECT_SYSTEM_DESIGN_EVOLUTION_Phase5.md](./PROJECT_SYSTEM_DESIGN_EVOLUTION_Phase5.md)**.
 
+Long-form Phase 6 (simple → advanced): **[PROJECT_SYSTEM_DESIGN_EVOLUTION_Phase6.md](./PROJECT_SYSTEM_DESIGN_EVOLUTION_Phase6.md)**.
+
 ---
 
 ## Phase 6 — Autopilot LangGraph (after P6-1)
@@ -821,6 +823,325 @@ flowchart LR
 ### Evolution note (P6-8 → P6-9)
 
 Before P6-9, operators could enqueue **`run_pipeline_build`** only via the **generic jobs router** after hand-crafting persistence. After P6-9, **Autopilot is a cohesive HTTP vertical**: one **`POST`** starts a tracked build with **correct `requirements` hydration** for the orchestrator, **cancel** is a product feature (not a Celery admin task), and **SSE** matches the **polling schema** so Phase 7 can swap transports without redesigning payloads.
+
+Long-form Phase 7 (simple → advanced): **[PROJECT_SYSTEM_DESIGN_EVOLUTION_Phase7.md](./PROJECT_SYSTEM_DESIGN_EVOLUTION_Phase7.md)**.
+
+---
+
+## Phase 7 snapshot — P7-1 · Document Uploader (browser → API → MinIO → Zustand)
+
+**P7-1** closes the loop between **placeholder `documentIds`** and **real corpus bytes**. The FastAPI router adds **`POST /api/autopilot/upload`**, which validates **project ownership**, enforces **per-file size** / **count** caps from **`Settings`**, optionally type-checks extensions, and streams objects into the configured **MinIO** bucket under **`autopilot/{user}/{project}/…`** keys via **`upload_blobs_sync`** (executed in a **thread** off the asyncio loop). The **Next.js** Autopilot page renders **`DocumentUploader`**: it lists server projects from **`GET /api/projects/`**, posts **`FormData`** through **`postFormData`**, and persists **`UploadedDocumentItem`** metadata in **`useAutopilotStore`** for later **`POST /api/autopilot/build`** wiring.
+
+### P7-1 — Upload + persistence path
+
+```mermaid
+flowchart LR
+  subgraph Web["Next.js (Autopilot page)"]
+    DU[DocumentUploader]
+    Z[(Zustand persist)]
+  end
+  subgraph API["FastAPI /api/autopilot"]
+    UP[POST /upload]
+    OWN[Project ownership check]
+  end
+  subgraph Obj["Object storage"]
+    M[(MinIO / S3 bucket)]
+  end
+  DU -->|GET list| PG[(PostgreSQL projects)]
+  DU -->|multipart projectId + files| UP
+  UP --> OWN
+  OWN --> PG
+  UP -->|put_object| M
+  UP -->|201 documents[]| DU
+  DU --> Z
+```
+
+### P7-1 — Build hand-off (conceptual; wired in later P7 tasks)
+
+```mermaid
+sequenceDiagram
+  participant U as Autopilot UI
+  participant API as FastAPI
+  participant S3 as MinIO
+  participant JOB as Celery worker
+
+  U->>API: POST /upload (multipart)
+  API->>S3: put_object(autopilot/…)
+  API-->>U: objectId list
+  Note over U: P7-2+ capture requirements
+  U->>API: POST /build (documentIds = objectIds)
+  API->>JOB: run_pipeline_build
+  JOB->>JOB: LangGraph reads document_ids from state
+```
+
+### Evolution note (P6-9 → P7-1)
+
+Before P7-1, **`documentIds`** were opaque strings with **no first-class ingestion path** from the product UI. After P7-1, **Autopilot shares the same MinIO substrate** referenced throughout Docker Compose and **`Settings`**, and the **frontend store** can accumulate **display-ready upload metadata** ahead of the **requirements** and **build progress** surfaces.
+
+---
+
+## Phase 7 snapshot — P7-2 · Requirements Form (Zustand + Zod + catalog)
+
+**P7-2** adds **`RequirementsForm`** on **`/autopilot`**: sliders and controls write **`useAutopilotStore.requirements`**, which is already **persisted** (same storage key as P7-1). **Target metrics** (four **0–1** sliders), **`optimizeFor`** (four mutually exclusive cards), optional **budget** / **latency** numeric fields, optional **cloud provider** (**`listCloudProviders()`**), and **`maxIterations` (1–10)** round-trip through **`patchRequirements` / `setRequirements`**. **Validate** runs **`BuildRequirementsSchema.safeParse`** so the client rejects impossible combinations before **P7-3** wires **`POST /api/autopilot/build`**.
+
+### P7-2 — Requirements in the Autopilot wizard
+
+```mermaid
+flowchart TB
+  subgraph Web["Next.js /autopilot"]
+    RF[RequirementsForm]
+    Zod[BuildRequirementsSchema Zod]
+    Z[(useAutopilotStore.requirements)]
+  end
+  RF -->|patchRequirements| Z
+  RF -.->|safeParse| Zod
+```
+
+### P7-2 — End-to-end hand-off (after P7-3+)
+
+```mermaid
+sequenceDiagram
+  participant U as Autopilot UI
+  participant Z as Zustand persist
+  participant API as POST /api/autopilot/build
+
+  U->>Z: targetMetrics optimizeFor budget latency cloud maxIterations
+  Note over U,Z: P7-2 complete — persisted requirements object
+  U->>API: projectId documentIds requirements baseConfig
+  Note over API: P7-3 will trigger this from a Start button
+```
+
+### Evolution note (P7-1 → P7-2)
+
+Before P7-2, **`requirements`** in the store used **defaults only** with no structured editor. After P7-2, operators can **author constraints** that match the **StartBuildRequest.requirements** contract, **validate locally** with **Zod**, and keep **upload metadata + requirements** in one session blob ready for **build progress** and **agent feed** tasks.
+
+---
+
+## Phase 7 snapshot — P7-3 · Build Progress Monitor (SSE + polling fallback)
+
+**P7-3** adds **`BuildProgressMonitor`** on **`/autopilot`** with **Start build** (**`POST /api/autopilot/build`**), **Cancel**, an **active build** selector (history in **`useAutopilotStore.builds`**), a **progress bar**, and **per-stage** checklist (**`AUTOPILOT_STAGE_ORDER`**). Agent log lines are surfaced in **P7-4** (**`AgentActivityFeed`**). **`useAutopilotBuildSubscription`** prefers **`EventSource`** on **`/api/autopilot/build/{id}/stream`** and falls back to **polling** **`GET /api/autopilot/build/{id}`** on stream errors. **`autopilot-build-status.ts`** normalises **`BuildStatusResponse`** into the persisted **`AutopilotBuild`** shape while preserving **`input`**.
+
+### P7-3 — Client subscription paths
+
+```mermaid
+flowchart TB
+  subgraph UI["Next.js /autopilot"]
+    BPM[BuildProgressMonitor]
+    H[useAutopilotBuildSubscription]
+    Z[(useAutopilotStore.builds)]
+  end
+  subgraph API["FastAPI P6-9"]
+    S["GET …/stream SSE"]
+    G["GET …/build poll"]
+    B["POST …/build"]
+    C["POST …/cancel"]
+  end
+  BPM -->|Start / Cancel| B
+  BPM -->|Cancel| C
+  BPM --> H
+  H -->|"EventSource"| S
+  H -->|"fallback interval"| G
+  H -->|upsertBuild| Z
+  S -->|JSON snapshots| H
+  G -->|JSON snapshots| H
+```
+
+### P7-3 — Sequence (start → live updates)
+
+```mermaid
+sequenceDiagram
+  participant M as BuildProgressMonitor
+  participant API as FastAPI
+  participant ES as EventSource / poll
+  participant Z as Zustand persist
+
+  M->>API: POST /api/autopilot/build
+  API-->>M: 202 buildId
+  M->>Z: upsertBuild(seed + input)
+  M->>ES: open stream or poll
+  loop Until terminal
+    API-->>ES: BuildStatusResponse
+    ES->>Z: merge progress stages messages
+  end
+```
+
+### Evolution note (P7-2 → P7-3)
+
+Before P7-3, requirements and uploads were **persisted** but nothing called **`POST /api/autopilot/build`** from the product UI. After P7-3, the Autopilot wizard is **closed-loop**: operators enqueue Celery-backed LangGraph runs and observe **real-time row projections** without leaving **`/autopilot`**, with **resilient transport** when SSE is unavailable.
+
+---
+
+## Phase 7 snapshot — P7-4 · Agent Activity Feed (filters + export)
+
+**P7-4** adds **`AgentActivityFeed`** on **`/autopilot`** below **`BuildProgressMonitor`**. It renders the full **`AutopilotBuild.messages`** list for the **active build** (same Zustand row updated by **`useAutopilotBuildSubscription`**). Operators **search** (substring over text, agent, timestamp), restrict by **agent** (**All agents** vs a distinct **`BuildMessage.agent`** value), toggle **message types** (**info** / **success** / **warning** / **error**), and **export** the **filtered** slice as **JSON** (metadata + messages) or **plain text** (one line per event). Filters reset when **`activeBuildId`** changes. The scroll region **sticks to the bottom** on new lines only while the user is already near the end, avoiding disruptive jumps when reading older lines.
+
+### P7-4 — Autopilot page data flow (observability slice)
+
+```mermaid
+flowchart TB
+  subgraph Page["/autopilot"]
+    BPM[BuildProgressMonitor]
+    AAF[AgentActivityFeed]
+  end
+  subgraph Client["Browser"]
+    H[useAutopilotBuildSubscription]
+    Z[(useAutopilotStore.builds activeBuildId)]
+  end
+  subgraph API["FastAPI"]
+    S["GET …/stream SSE"]
+    G["GET …/build poll"]
+  end
+  BPM --> H
+  H --> S
+  H --> G
+  H -->|upsertBuild messages stages| Z
+  AAF -->|read messages filter export| Z
+```
+
+### Evolution note (P7-3 → P7-4)
+
+Before P7-4, **`messages`** were only implied for future UI (stage list + progress dominated the monitor). After P7-4, **agent trace lines** are first-class in the product: operators can **slice**, **review**, and **archive** orchestrator output without opening browser devtools or raw API payloads.
+
+---
+
+## Phase 7 snapshot — P7-5 · Metrics Dashboard (typed `dashboardMetrics` + Recharts)
+
+**P7-5** adds **`MetricsDashboard`** on **`/autopilot`** between **`BuildProgressMonitor`** and **`AgentActivityFeed`**. Because **`AutopilotBuild.result`** from the worker is an **opaque orchestrator JSON** (not **`BuildResultSchema`**), the API could not chart “final metrics” from **`result`** alone. The backend now runs **`extract_dashboard_metrics`** over **`result.stage_outputs`** and attaches **`dashboard_metrics`** to every **`BuildStatusResponse`** (poll + SSE). The frontend parses **`dashboardMetrics`** into **`AutopilotBuild`**, renders **Recharts** line (**progress** + **iteration** samples), horizontal bars (**quality vs targets**), embedding **latency** bars (with optional SLO reference), retrieval **performance** bars, and **SLO cards** (budget cap, latency requirement, eval proxy latency).
+
+### P7-5 — Data path (build status → charts)
+
+```mermaid
+flowchart LR
+  subgraph Worker["Celery run_pipeline_build"]
+    G[LangGraph orchestrator]
+    R[(autopilot_builds.result JSON)]
+  end
+  subgraph API["FastAPI build_status_response"]
+    E[extract_dashboard_metrics]
+    B[BuildStatusResponse + dashboard_metrics]
+  end
+  subgraph Web["apps/web /autopilot"]
+    M[MetricsDashboard]
+    RC[Recharts]
+  end
+  G --> R
+  R --> E
+  E --> B
+  B -->|SSE or poll| M
+  M --> RC
+```
+
+### P7-5 — Sequence (metrics on each status tick)
+
+```mermaid
+sequenceDiagram
+  participant W as Celery worker
+  participant DB as PostgreSQL
+  participant API as GET build / SSE
+  participant Z as Zustand
+  participant D as MetricsDashboard
+
+  W->>DB: persist result.stage_outputs
+  API->>DB: read AutopilotBuild row
+  API->>API: extract_dashboard_metrics(result)
+  API-->>Z: BuildStatusResponse + dashboardMetrics
+  Z->>D: render charts + SLO cards
+```
+
+### Evolution note (P7-4 → P7-5)
+
+Before P7-5, observability stopped at **text logs** and **numeric progress**. After P7-5, operators see **structured quality/latency/retrieval** views aligned with Autopilot’s internal stage contracts, without waiting for a future normalised **`BuildResult`** row.
+
+---
+
+## Phase 7 snapshot — P7-6 · Decision Explainer & Results (`BuildResult` + UI)
+
+**P7-6** closes the loop between **opaque orchestrator JSON** and the **shared pipeline contract**: the Celery worker calls **`compose_build_result_payload`** so **`autopilot_builds.result`** also contains a validated **`BuildResultSchema`** ( **`config`**, **`metrics`**, **`decisions`**, **`deployment`**, **`total_iterations`** ) alongside legacy keys such as **`stage_outputs`**. The **`/autopilot`** page adds **`ResultsSummary`** (metric cards, stub deployment, JSON download) and **`DecisionExplainer`** (per-stage rationale, embedding benchmark table, **Open in Designer**). **`_optional_typed_result`** in FastAPI can now populate **`BuildStatusResponse.result`** for poll/SSE clients.
+
+### P7-6 — Data path (worker → API → explainer)
+
+```mermaid
+flowchart TB
+  subgraph Worker["Celery run_pipeline_build"]
+    G[LangGraph final stage_outputs]
+    C[compose_build_result_payload]
+    R[(autopilot_builds.result)]
+  end
+  subgraph API["GET /api/autopilot/build/{id}"]
+    V[_optional_typed_result]
+    B[BuildStatusResponse.result]
+  end
+  subgraph Web["apps/web"]
+    RS[ResultsSummary]
+    DE[DecisionExplainer]
+    Z[(useAutopilotStore)]
+  end
+  G --> C
+  C --> R
+  R --> V
+  V --> B
+  B -->|SSE / poll| Z
+  Z --> RS
+  Z --> DE
+```
+
+### P7-6 — Designer handoff (Explain in Designer)
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant DE as DecisionExplainer
+  participant ZD as designerStore
+  participant R as Next.js router
+
+  U->>DE: Open in Designer
+  DE->>ZD: loadPipeline(build.result.config)
+  DE->>R: push /designer/review?source=autopilot
+```
+
+### Evolution note (P7-5 → P7-6)
+
+Before P7-6, charts could use **`dashboard_metrics`**, but there was **no first-class typed result** for a “build report” or Designer import. After P7-6, the same status payload can drive **explainability** and a **repeatable pipeline JSON** aligned with **`PipelineConfigurationSchema`**, while older rows without a normalised bundle are handled gracefully in the UI.
+
+---
+
+## Phase 7 snapshot — P7-7 · Autopilot Entry & History Pages (navigation + list API)
+
+**P7-7** completes the **Autopilot IA shell**: a persistent **`AutopilotShell`** layout (sub-nav) wraps **`/autopilot`** (overview), **`/autopilot/new`** (upload + requirements + progress stack moved off the root), **`/autopilot/history`** (server-backed table), and **`/autopilot/projects`** (backend project picker aligned with **`POST /api/autopilot/upload`**). The backend adds **`GET /api/autopilot/builds`** with pagination and optional **`project_id`**, backed by **`AutopilotBuildService.list_for_user`** (join to **`projects`** for names and tenancy). Deep links **`/autopilot/new?build=&project=`** hydrate Zustand via a one-shot **`GET /api/autopilot/build/{id}`** when the build is absent locally.
+
+### P7-7 — Route map (App Router)
+
+```mermaid
+flowchart LR
+  subgraph Shell["AutopilotShell layout"]
+    O["/autopilot — overview"]
+    N["/autopilot/new — wizard"]
+    H["/autopilot/history"]
+    P["/autopilot/projects"]
+  end
+  O --> N
+  O --> H
+  O --> P
+  H -->|"Open ?build=&project="| N
+```
+
+### P7-7 — History read path
+
+```mermaid
+sequenceDiagram
+  participant UI as History page
+  participant API as GET /api/autopilot/builds
+  participant DB as PostgreSQL
+
+  UI->>API: page + optional project_id
+  API->>DB: JOIN builds ↔ projects (user scoped)
+  DB-->>API: rows + total count
+  API-->>UI: AutopilotBuildListResponse
+```
+
+### Evolution note (P7-6 → P7-7)
+
+Before P7-7, **all Autopilot UX lived on one URL** and there was **no first-party API to enumerate builds** across sessions. After P7-7, operators get a **discoverable multi-page flow** and a **paginated history contract** that matches how other products surface “job lists,” while the existing poll/SSE **`GET /api/autopilot/build/{id}`** path remains the source of truth for rich stage data.
 
 ---
 

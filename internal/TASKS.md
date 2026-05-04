@@ -47,3 +47,15 @@
 | P6-7 · Deployment Agent | `feature/p6-deployment-agent` | ✅ done |
 | P6-8 · Autopilot Orchestrator | `feature/p6-autopilot-orchestrator` | ✅ done |
 | P6-9 · Autopilot API Endpoints | `feature/p6-autopilot-api` | ✅ done |
+
+## Phase 7 — Autopilot frontend
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P7-1 · Document Uploader | `feature/p7-document-uploader` | ✅ done |
+| P7-2 · Requirements Form | `feature/p7-requirements-form` | ✅ done |
+| P7-3 · Build Progress Monitor | `feature/p7-build-progress` | ✅ done |
+| P7-4 · Agent Activity Feed | `feature/p7-agent-activity-feed` | ✅ done |
+| P7-5 · Metrics Dashboard | `feature/p7-metrics-dashboard` | ✅ done |
+| P7-6 · Decision Explainer & Results | `feature/p7-results-summary` | ✅ done |
+| P7-7 · Autopilot Entry & History Pages | `feature/p7-autopilot-pages` | ✅ done |
