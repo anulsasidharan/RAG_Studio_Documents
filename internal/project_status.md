@@ -77,10 +77,10 @@
 | 64 | Phase 7 | P7-6 · Decision Explainer & Results | `feature/p7-results-summary` | Build explainability and final result visualization screens. | ✅ done |
 | 65 | Phase 7 | P7-7 · Autopilot Entry & History Pages | `feature/p7-autopilot-pages` | Build autopilot entry, layout, project listing, and history pages. | ✅ done |
 |  | `Phase 8` | `Integrate bidirectional handoff between Designer and Autopilot so both remain synchronized.` |  |  |  |
-| 66 | Phase 8 | P8-1 · Designer → Autopilot Handoff | `feature/p8-designer-to-autopilot` | Enable handoff from manual Designer config into Autopilot optimization. | ⬜ pending |
-| 67 | Phase 8 | P8-2 · Autopilot → Designer Visualization | `feature/p8-autopilot-to-designer` | Enable importing autopilot results back into Designer review flow. | ⬜ pending |
-| 68 | Phase 8 | P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | Add evaluation execution/history/compare backend endpoints. | ⬜ pending |
-| 69 | Phase 8 | P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | Add deployment trigger/status/list/teardown backend endpoints. | ⬜ pending |
+| 66 | Phase 8 | P8-1 · Designer → Autopilot Handoff | `feature/p8-designer-to-autopilot` | Enable handoff from manual Designer config into Autopilot optimization. | ✅ done |
+| 67 | Phase 8 | P8-2 · Autopilot → Designer Visualization | `feature/p8-autopilot-to-designer` | Enable importing autopilot results back into Designer review flow. | ✅ done |
+| 68 | Phase 8 | P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | Add evaluation execution/history/compare backend endpoints. | ✅ done |
+| 69 | Phase 8 | P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | Add deployment trigger/status/list/teardown backend endpoints. | ✅ done |
 |  | `Phase 9` | `Add MLflow experiment tracking for reproducibility across Autopilot runs.` |  |  |  |
 | 70 | Phase 9 | P9-1 · MLflow Integration | `feature/p9-mlflow-integration` | Add experiment tracking for autopilot runs, metrics, params, and artifacts. | ⬜ pending |
 |  | `Phase 10` | `Achieve comprehensive quality gates through unit, integration, and end-to-end testing.` |  |  |  |

@@ -59,3 +59,12 @@
 | P7-5 · Metrics Dashboard | `feature/p7-metrics-dashboard` | ✅ done |
 | P7-6 · Decision Explainer & Results | `feature/p7-results-summary` | ✅ done |
 | P7-7 · Autopilot Entry & History Pages | `feature/p7-autopilot-pages` | ✅ done |
+
+## Phase 8 — Designer ↔ Autopilot integration
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P8-1 · Designer → Autopilot Handoff | `feature/p8-designer-to-autopilot` | ✅ done |
+| P8-2 · Autopilot → Designer Visualization | `feature/p8-autopilot-to-designer` | ✅ done |
+| P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | ✅ done |
+| P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | ✅ done |

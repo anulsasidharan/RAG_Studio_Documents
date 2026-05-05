@@ -5273,7 +5273,184 @@ Each row links to **`/autopilot/new?build={id}&project={projectId}`**. **`Autopi
 
 ### What is the next task after P7-7?
 
-**Phase 8 · P8-1 · Designer → Autopilot Handoff** — wire “Optimize this” style flows so Designer configs seed Autopilot requirements without manual re-entry.
+**Phase 8 · P8-1 · Designer → Autopilot Handoff** — wire “Optimize this” style flows so Designer configs seed Autopilot requirements without manual re-entry. **(Done — see Phase 8 · P8-1 section below.)**
+
+---
+
+## Phase 8 · P8-1 · Designer → Autopilot Handoff
+
+### What user problem does P8-1 solve?
+
+Users who finish a **Designer** draft should not **re-type** chunk sizes, embedding IDs, retrieval strategy, and cloud preference when switching to **Autopilot**. P8-1 carries the draft into Autopilot as an optional **`baseConfig`** on **`POST /api/autopilot/build`** and surfaces that intent in the UI.
+
+### Where does the user start the handoff?
+
+On **`/designer/review`**, the **`DesignerToAutopilotHandoff`** card explains the flow and navigates to **`/autopilot/new?from=designer`** after confirmation.
+
+### What happens in client state when the user confirms?
+
+**`useAutopilotStore.startFromDesigner(draft)`** stores **`baseConfig: PipelineConfiguration`**, resets **`uploadedDocuments`** and **`selectedBackendProjectId`**, reapplies default **`requirements`**, and sets **`requirements.cloudProvider`** from **`draft.cloudProvider`** so the requirements form matches the Designer cloud choice.
+
+### How does the build request include the Designer baseline?
+
+**`BuildProgressMonitor`** already merges **`baseConfig`** into the JSON body as **`baseConfig`** (camelCase). FastAPI’s **`RAGBaseModel`** aliases **`base_config`** ↔ **`baseConfig`**. **`StartBuildRequest.base_config`** validates as **`PipelineConfigurationSchema`** and is persisted under **`requirements["base_config"]`** on the build row for workers.
+
+### Does Autopilot run without new uploads?
+
+**No.** **`document_ids`** remains **`min_length=1`**; the user must **upload corpus files** and pick a **backend project** before **Start build**. The Designer draft describes pipeline hyperparameters, not document binaries.
+
+### What does the banner on `/autopilot/new` communicate?
+
+**`AutopilotDesignerBaselineBanner`** appears when **`baseConfig`** is set: pipeline name, reminder that **`baseConfig`** is attached on start, optional **Clear baseline** calling **`clearHandoff()`** (drops **`baseConfig`** only).
+
+### Interview trap: does handoff replace Autopilot optimization?
+
+**No.** **`base_config`** is a **starting point** for the orchestrator and result compositor (see **`autopilot_build_result`**); agents may still change chunking, embeddings, and retrieval based on corpus analysis and targets.
+
+### What is the next task after P8-1?
+
+**P8-2 · Autopilot → Designer Visualization** — (done; see Phase 8 · P8-2 below). **P8-3** and **P8-4** are complete (see Phase 8 · P8-3 and P8-4). Next in the roadmap: **P9-1 · MLflow Integration**.
+
+---
+
+## Phase 8 · P8-2 · Autopilot → Designer Visualization
+
+### What user problem does P8-2 solve?
+
+After an Autopilot build completes, users need to **see the optimised pipeline in the same Designer visualisation** (Mermaid graph, cost strip, export) they would get from a manual design — without re-entering stage fields. P8-2 turns **`BuildResult.config`** into the Designer **`draft`**, keeps **evaluation metrics** visible on review, and links back to the Autopilot run.
+
+### How does the user open Autopilot output in Designer?
+
+On the completed build screen, **`DecisionExplainer`** exposes **Open in Designer**. That calls **`applyAutopilotBuildResult(buildId, result)`** on **`useDesignerStore`**, then navigates to **`/designer/review?source=autopilot&build=<id>`**.
+
+### What does `applyAutopilotBuildResult` do?
+
+It **loads** **`result.config`** into **`draft`** (via **`deepStripNulls`**), sets **`metadata.source: 'autopilot'`** and **`metadata.buildId`**, unlocks the full stage diagram (**`diagramMaxVisitedStageIndex`**), and stores **`autopilotImportSnapshot`** with **`metrics`** and **`totalIterations`** for the review banner.
+
+### What appears on `/designer/review` after import?
+
+**`AutopilotDesignerImportBanner`** renders when the snapshot’s **`buildId`** matches **`draft.metadata.buildId`**: RAGAS-style metric tiles (faithfulness, relevance, precision, recall), latency and iteration count, plus **Open Autopilot build** → **`/autopilot/new?build=…`**. The existing **DesignerShell** footer still renders **PipelineVisualizer**, **CostEstimator**, and **CodeExporter** bound to the same **`draft`**.
+
+### Why is `syncAutopilotSnapshotFromStores` needed?
+
+If **`metadata`** already marks **`source: autopilot`** but the metric snapshot was cleared (e.g. **`loadPipeline`** from a template wipes **`autopilotImportSnapshot`**), the sync tries **`useAutopilotStore.builds[buildId].result`** to **rehydrate** metrics without another navigation.
+
+### What clears the Autopilot import snapshot?
+
+**`loadPipeline`**, **`resetDraft`**, and any path that sets **`autopilotImportSnapshot: null`** — template apply and full reset should not keep stale Autopilot metrics.
+
+### Does P8-2 add a new backend endpoint?
+
+**No.** It is a **frontend integration** on top of **`BuildResult`** already returned by **`GET /api/autopilot/build/{id}`** and the orchestrator’s composed result.
+
+### Interview trap: does “Open in Designer” mutate Autopilot state?
+
+**No.** It only reads **`build.result`** and updates **`useDesignerStore`**; existing **`useAutopilotStore`** build records are not modified by this action.
+
+### What is the next task after P8-2?
+
+**P8-3 · Evaluation API Endpoints** is implemented (see Phase 8 · P8-3). **P8-4 · Deployment API Endpoints** is also complete (see Phase 8 · P8-4). Next: **P9-1 · MLflow Integration**.
+
+---
+
+## Phase 8 · P8-3 · Evaluation API Endpoints
+
+### What user problem does P8-3 solve?
+
+Designer and Autopilot need a **shared backend** to **run RAGAS-style evaluations** on a saved **pipeline configuration**, **review past runs**, and **compare two configs** (A/B) without re-implementing RAGAS in the client or ad-hoc scripts.
+
+### What HTTP surface does the API expose?
+
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/api/evaluation/run` | Create an `evaluation_runs` row, execute evaluation, return `EvaluationRunResponse` (status `complete` or `failed`). |
+| `GET` | `/api/evaluation/run/{run_id}` | Return one run (metrics, failure analysis, error) for an **owned** config. |
+| `GET` | `/api/evaluation/runs?config_id=<uuid>` | List runs for a config, **newest first** (with `total` count). |
+| `POST` | `/api/evaluation/compare` | Compare two configs by **reusing two completed run IDs** or by **running both** on a **shared synthetic** test set of `test_set_size`. |
+
+### How is the acting user determined?
+
+Same pre-auth pattern as other APIs: **`X-User-ID`** (or `default_user_id` from settings). `EvaluationService` joins `evaluation_runs` → `pipeline_configs` → `projects` and requires `projects.user_id` to match.
+
+### How does a run build the test set?
+
+- If the client sends **`test_set`**: each row is a **`TestSetEntry`** (`question`, `ground_truth`, optional `context` list). Empty **`test_set`** is rejected (`400`).
+- If **`test_set` is omitted**: the service generates **`test_set_size`** rows (**10–500**) from an internal synthetic corpus (deterministic segments), matching the schema comment that absent rows imply generated data.
+
+### How are model answers and contexts produced?
+
+For each row, the service calls **`run_guarded_rag_query`**: context documents are **`entry.context`** if provided, otherwise **`ground_truth`** as a single **`Document`** (simulates grounded retrieval). The **generation** answer feeds RAGAS alongside **`contexts`** derived from **`documents_used`** (fallback to **`ground_truth`**).
+
+### Which metrics run in RAGAS?
+
+The **`EvaluationEngine`** resolves metric names via **`resolve_ragas_metric_names`**. Request **`metrics`** overrides pipeline defaults; otherwise **`metric_names_from_pipeline`** reads **`stages.evaluation`** when evaluation is enabled; **`latency`** in the pipeline list is excluded from RAGAS (wall-clock is tracked separately as **`avg_latency_ms`** on the result).
+
+### What gets persisted on `evaluation_runs`?
+
+**`status`**, serialised **`EvaluationMetrics`**, optional **`FailureAnalysisResult`**, **`test_set_size`**, **`error`**, **`completed_at`**. **`build_id`** remains `NULL` for API-triggered runs (Autopilot can link later).
+
+### How does `POST /api/evaluation/compare` work?
+
+- If **both** `run_id_a` and `run_id_b` are set: load **complete** runs, verify each **run’s `config_id`** matches the given config id, reuse stored metrics.
+- If **neither** is set: build **one** shared synthetic test set, run **`run_evaluation` twice** (config A and B), then **`compare_metrics`** (per-metric winner + overall tally).
+- If only one run id is set: **`400`** — must supply both or neither.
+
+### What does the compare response include?
+
+**`CompareConfigsResponse`**: **`metrics_a` / `metrics_b`**, per-metric **`deltas`** (with **`winner`** `a` / `b` / `tie`, including **`avg_latency_ms`** when present), **`overall_winner`**, and a short human **`summary`**.
+
+### Interview trap: does evaluation require a deployed vector index?
+
+**Not for this API path.** Context is either user-supplied, or **ground-truth text** used as the chunk passed into the guarded RAG path — so the endpoint is **self-contained** for integration and lab use. A future enhancement can wire **real retrieval** from Qdrant when indexed corpora exist.
+
+### What is the next task after P8-3?
+
+**P8-4 · Deployment API Endpoints** is implemented (see Phase 8 · P8-4). Next in the roadmap: **P9-1 · MLflow Integration**.
+
+---
+
+## Phase 8 · P8-4 · Deployment API Endpoints
+
+### What user problem does P8-4 solve?
+
+Saved **pipeline configurations** need a **first-class HTTP API** to **start** a deployment (Docker / K8s / cloud targets), **poll status**, **list** deployment history under a **project**, and **tear down** a deployment record — without bypassing the DB or calling Celery manually from scripts.
+
+### What HTTP surface does the API expose?
+
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/api/deployment/deploy` | Create a `deployments` row (`status=deploying`), commit, enqueue Celery `run_deployment`, return `DeployResponse` (`201`). |
+| `GET` | `/api/deployment/{deployment_id}/status` | Return endpoint, health URL, image tag, timestamps, `error` from `deployment_info` when `failed`. |
+| `GET` | `/api/deployment/deployments?project_id=<uuid>` | Paginated list (`page`, `page_size` ≤ 100) for all configs in that **owned** project. |
+| `DELETE` | `/api/deployment/{deployment_id}` | Logical teardown: `status=teardown`, clear `endpoint` / `health_check_url`, set `deployment_info.teardown_at`. |
+
+### How is the acting user scoped?
+
+Same as evaluation/projects: **`X-User-ID`** (or **`default_user_id`**). Every query joins **`deployments` → `pipeline_configs` → `projects`** and requires **`projects.user_id`** to match and **`deleted_at` IS NULL**.
+
+### Why commit before enqueueing Celery?
+
+The **`run_deployment`** worker opens a **new synchronous session** and loads the row by ID. If the FastAPI request transaction had not yet committed, the worker could **race** and return “deployment not found”. **`DeploymentService.trigger_deploy`** **`commit()`**s immediately after flush, then calls **`tasks.run_deployment.delay`**.
+
+### What does the existing Celery task do?
+
+**`jobs.run_deployment`** (see **`app/worker/tasks.py`**) is a **stub**: it sets **`deployed`**, a **stub HTTPS endpoint** under **`stub.rag-studio.local`**, **`health_check_url`**, **`docker_image_tag`**, **`deployed_at`**, and merges **`deployment_info.stub: true`**. Real Terraform / `kubectl` / cloud apply remains **operator-gated** (see deployment agent and Phase 12).
+
+### How do optional deploy body fields persist?
+
+**`region`** and **`image_tag`** map to **`deployment_info.region`** (JSON) and **`docker_image_tag`** on the row, respectively.
+
+### What is idempotent about teardown?
+
+Calling **`DELETE`** on an already **teardown** deployment still requires **ownership**; the handler updates the row again (safe) and returns **`DeploymentStatusResponse`** with **`status: teardown`**.
+
+### Interview trap: does list filter by configuration?
+
+**No** — it filters by **`project_id`** only, so you see **all deployments** for every **saved config** in that project (newest first). Use **`config_id`** from each **`DeploymentListItem`** to correlate.
+
+### What is the next task after P8-4?
+
+**P9-1 · MLflow Integration** — experiment tracking for Autopilot runs (see `docs/internal/project_status.md`).
 
 ---
 
