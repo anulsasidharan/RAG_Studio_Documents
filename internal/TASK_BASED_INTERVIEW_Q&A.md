@@ -4,6 +4,102 @@
 
 ---
 
+## Phase 12 · P12-1 — Authentication & Authorization
+
+### What changed from `X-User-ID` scoping to production auth?
+
+Phase 12 keeps backward-compatible user scoping for local development, but in production mode (`AUTH_REQUIRED=true`) requests must include a bearer JWT. The API now resolves identity from token claims (`sub`, `email`, `role`) before any fallback logic.
+
+### Why add `/api/auth/login` and `/api/auth/me`?
+
+`/api/auth/login` is the bootstrap token-issuing endpoint for secured environments, and `/api/auth/me` is a fast sanity endpoint to validate token wiring and role propagation through dependencies.
+
+### How is role-based authorization enforced?
+
+Admin-only operations use a dedicated `AdminPrincipal` dependency. Deployment mutation actions (`deploy`, `teardown`) now require `role=admin`, returning `403` for non-admin callers.
+
+### Interview trap: Is JWT validation enough if signature checks pass?
+
+No. You still must validate claim shape and types (`sub` UUID, role/email presence), enforce expiration, and tie downstream authorization to explicit role checks.
+
+---
+
+## Phase 12 · P12-2 — Security Hardening
+
+### Which HTTP hardening controls were added?
+
+The API now emits key security headers: CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive `Permissions-Policy` baseline.
+
+### How is rate limiting implemented?
+
+Write methods (`POST`, `PUT`, `PATCH`, `DELETE`) are rate-limited using an in-memory per-minute bucket keyed by `client_host + method + path`, returning `429` with `Retry-After` on excess traffic.
+
+### Why also update `.gitignore` in this phase?
+
+To prevent accidental secret commits from production overlays, local secret files (`k8s/production/secret.yaml` and `*.local.yaml`) are explicitly ignored.
+
+---
+
+## Phase 12 · P12-3 — Performance Optimisation
+
+### What is the low-risk API optimization added first?
+
+GZip compression for response bodies above a threshold (`minimum_size=512`) gives immediate bandwidth and latency gains for JSON-heavy endpoints without business-logic changes.
+
+### Why was HPA included in performance optimization?
+
+Performance is not only per-request latency; it is also sustained throughput under load. Horizontal Pod Autoscaler on API CPU utilization provides elastic scaling under bursts.
+
+### Interview trap: Is frontend perf solved just by Next.js standalone mode?
+
+No. Standalone output helps deployment footprint, but production performance still depends on cache behavior, API latency, compression, autoscaling, and ingress/network tuning.
+
+---
+
+## Phase 12 · P12-4 — Kubernetes Production Manifests
+
+### What production manifest components are mandatory?
+
+At minimum: namespace isolation, config/secret separation, API and web deployments + services, ingress with TLS, autoscaling policy, and a network policy baseline.
+
+### Why keep `secret.example.yaml` instead of committing real secret manifests?
+
+It documents required keys and expected shape while avoiding credential leakage. Operators generate real `secret.yaml` from secure vault/CI pipelines.
+
+### Interview trap: Is this full zero-trust network policy?
+
+No. The provided network policy is a conservative baseline for deny-default directionality and should be tightened per dependency graph in hardened clusters.
+
+---
+
+## Phase 12 · P12-5 — Final Documentation Pass
+
+### What documents should be finalized before launch?
+
+A deploy runbook, security/auth operating notes, rollout and rollback steps, and status tracking updates that align engineering artifacts with execution reality.
+
+### Why maintain internal completion notes?
+
+They create traceability across code, manifests, and release actions, which helps handoffs, audits, incident response, and interview-style architectural review.
+
+---
+
+## Phase 12 · P12-6 — Production Deployment & Launch
+
+### What is the expected production launch sequence?
+
+Prepare secrets and images, apply manifests (`kubectl apply -k`), wait for rollouts, validate health and auth endpoints, run smoke tests, then announce release with rollback references.
+
+### What makes a launch “production ready” versus “deployment succeeded”?
+
+Production readiness includes post-deploy validation, monitoring health, auth/authorization checks, and documented rollback, not just successful Kubernetes apply output.
+
+### Interview trap: Did this phase execute a live external cluster rollout automatically?
+
+No. The phase codifies production deployment artifacts and repeatable runbook steps. Actual cluster rollout requires environment access and operator approval in the target infrastructure.
+
+---
+
 ## P0-1 · Monorepo Skeleton
 
 ### Monorepo & Workspace Concepts
@@ -5450,7 +5546,191 @@ Calling **`DELETE`** on an already **teardown** deployment still requires **owne
 
 ### What is the next task after P8-4?
 
-**P9-1 · MLflow Integration** — experiment tracking for Autopilot runs (see `docs/internal/project_status.md`).
+**P9-1 · MLflow Integration** is complete (see Phase 9 · P9-1 below). Next on the roadmap: **P10-1 · Backend Unit Tests**.
+
+---
+
+## Phase 9 · P9-1 — MLflow Integration
+
+### Why add MLflow to RAG Studio?
+
+Autopilot runs many stochastic and configuration-heavy steps (chunking, embeddings, retrieval, evaluation). **MLflow** gives a **durable audit trail**: each build becomes a **run** with **parameters** (requirements and stage choices), **metrics** (RAGAS-style scores, embedding benchmarks, iteration count), and **artifacts** (JSON snapshot of `stage_outputs`). Teams can **compare runs**, reproduce decisions, and tie UI build IDs to tracking-server runs.
+
+### Where is MLflow triggered in the backend?
+
+The **Celery** task **`jobs.run_pipeline_build`** in **`app/worker/tasks.py`** invokes the LangGraph orchestrator, persists the build row, and then calls **`log_autopilot_build_to_mlflow`** from **`app/services/mlflow_tracking.py`**. A second call on **graph failure** logs a **failed** run with the exception message and empty `stage_outputs`.
+
+### What happens if MLflow is down?
+
+Logging is **best-effort**. Errors when setting the experiment, starting a run, or uploading artifacts are **caught and logged**; they **do not** change build status. Set **`MLFLOW_ENABLED=false`** (see **`.env.example`**) to skip all client calls in environments without a server.
+
+### Which settings control tracking?
+
+| Variable | Role |
+|----------|------|
+| **`MLFLOW_TRACKING_URI`** | Tracking server URL (Compose defaults to **`http://mlflow:5000`** inside the stack, **`http://localhost:5000`** on the host). |
+| **`MLFLOW_ENABLED`** | Master switch; when false, the worker skips MLflow entirely. |
+| **`MLFLOW_EXPERIMENT_NAME`** | Experiment name (default **`rag-studio-autopilot`**). |
+
+### What is logged as parameters vs metrics?
+
+**Parameters** (string-valued, capped in count and length): flattened **`requirements`** (e.g. `optimize_for`, `target_metrics.*`) and high-signal **stage** fields (status, selected embedding provider/model, chunking strategy, retrieval strategy). **Metrics**: **`eval.*`** from the evaluation stage when present (faithfulness, answer relevance, context precision/recall, latency), **`eval.meets_targets`** as 0/1, **`autopilot.iteration`**, **embedding candidate** composite scores and latencies, and **`deployment.complete`** as 0/1.
+
+### What artifact is stored?
+
+A JSON file under the run’s **`autopilot/`** artifact path containing **`build_id`**, **`project_id`**, **`requirements`**, **`stage_outputs`**, **`build_status`**, **`iteration`**, and optionally the list of **normalized result keys** from the composed API payload.
+
+### Does the API surface the MLflow run id?
+
+On **successful** builds, **`AutopilotBuild.result`** may include **`mlflow_run_id`**, **`mlflow_tracking_uri`**, and **`mlflow_experiment_name`** when logging succeeds—useful for deep-linking from an internal dashboard to the MLflow UI (exact URL shape depends on deployment).
+
+### Why log from the worker and not FastAPI?
+
+The **heavy graph work** runs in **Celery**; keeping MLflow beside the orchestrator avoids duplicating calls, ensures **one run per completed job**, and matches the machine that already holds **`stage_outputs`** and iteration counts.
+
+### How do you avoid huge parameter cardinality?
+
+The helper **`_flatten`** skips deep nesting beyond a bounded depth, **clips** string lengths, caps the number of **params** and **tags**, and omits bulky keys such as **`per_row_scores`** and full **`candidates_tried`** rows from param extraction (benchmarks still appear as **metrics** for the first few candidates).
+
+### Where is MLflow wired in Docker Compose?
+
+**`docker/docker-compose.yml`** passes **`MLFLOW_TRACKING_URI`**, **`MLFLOW_ENABLED`**, and **`MLFLOW_EXPERIMENT_NAME`** into both **`api`** and **`worker`** services so workers resolve the tracking server on the Compose network.
+
+### Interview trap: Does every evaluation API call log to MLflow?
+
+**No** — **P9-1** scopes logging to **`run_pipeline_build`**. Standalone **`jobs.run_evaluation`** tasks are unchanged unless extended in a future task.
+
+### What is ignored locally for CLI MLflow?
+
+**`.gitignore`** includes **`mlruns/`** so a developer running MLflow’s default file-backed store beside the repo does not commit local run directories (Docker Compose continues to use the **`mlflow-data`** volume for the server).
+
+### What is the next milestone after P9-1?
+
+**Phase 10** — **`P10-1`** backend unit testing gates (`docs/internal/project_status.md`).
+
+---
+
+## Phase 10 · P10-1 — Backend Unit Tests
+
+### What does P10-1 deliver?
+
+A **repeatable FastAPI unit-test gate**: **`pytest`** over **`apps/api/tests/`** (excluding **`tests/test_integration`** for CI speed), **`pytest-cov`** on package **`app`** with **≥ 70%** line coverage, **`pytest-asyncio`** in auto mode, and **marked** tests (**`@pytest.mark.unit`** vs **`@pytest.mark.integration`**) so selective runs stay fast. **P10-1** extends coverage with **router-level** tests for **`/api/evaluation/*`** (previously exercised only via core evaluation modules) and **pure helpers** in **`evaluation_service`** (synthetic test-set resolution).
+
+### How does CI run backend tests?
+
+**`.github/workflows/ci.yml`** job **Backend — Unit Tests** sets **`APP_ENV=test`**, **`DATABASE_URL=sqlite+aiosqlite:///./test.db`**, Redis sidecar, and runs:
+
+`pytest tests/ --ignore=tests/test_integration --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=70 -v --tb=short -x`
+
+The **`-x`** flag stops on the first failure to shorten feedback. **Worker** (`app/worker/*`) is **omitted** from coverage in **`pyproject.toml`** as operational rather than API logic.
+
+### What does `tests/conftest.py` set up?
+
+Before importing **`app.main`**, it sets **`APP_ENV`**, **`DATABASE_URL`** (SQLite async), **`SECRET_KEY`**, and placeholder provider keys so **Settings** and **Celery** load cleanly. Session fixtures create **SQLite ORM tables** from **`Base.metadata`** and expose **`sync_client`** (**`TestClient`**) and **`async_client`** (**`httpx.AsyncClient`** + **`ASGITransport`**).
+
+### Why mock `EvaluationService` in HTTP tests?
+
+**`POST /api/evaluation/run`** ultimately calls **`run_guarded_rag_query`**, **RAGAS**, and the **evaluation engine** — too heavy and flaky for unit gates. Tests **patch** **`app.routers.evaluation.EvaluationService.<method>`** with **`AsyncMock`** to assert **status codes** and **JSON shapes** (404 when the service returns **`None`**, 400 on **`ValueError`**, 200 on success) without hitting real models or Redis/Qdrant.
+
+### Where do you import private helpers like `_resolve_test_entries`?
+
+Only in **dedicated unit tests** (`tests/test_services/test_evaluation_service_helpers.py`) that validate **input validation** (e.g. empty **`test_set`** raises **`ValueError`**) and **synthetic test-set sizing**. Prefer **public APIs** when possible; private imports are justified when the helper guards **user-visible error semantics**.
+
+### What is the difference between `unit` and `integration` markers?
+
+**`unit`** — fast, isolated, mocks external I/O; suitable for pre-commit and tight loops. **`integration`** — hits **real SQLite** via **`TestClient`**, multiple routes, or **Celery** stubs (e.g. **`test_deployment_router.py`**). CI currently runs **all** non-integration-folder tests together; markers support future filtering (e.g. **`pytest -m unit`**).
+
+### How do you run tests locally?
+
+From **`apps/api`**: install **`requirements.txt`** + **`requirements-dev.txt`**, then **`pytest`**. On Windows, native **`pip install`** can hit **build issues** (e.g. **pyarrow**); use **WSL**, **Docker** (same image as **`Dockerfile`**), or **CI** as the source of truth for green builds.
+
+### Interview trap: Does P10-1 add E2E or Playwright tests?
+
+**No** — those are **P10-4**. **P10-2** covers **backend integration** tests; **P10-3** is **frontend** unit tests.
+
+### What should developers not commit after running coverage?
+
+**`.coverage`**, **`coverage.xml`**, and **`htmlcov/`** are listed in **`.gitignore`** so local reports never land in git.
+
+### What is the next task after P10-1?
+
+**P10-2 · Backend Integration Tests** — broaden **cross-flow** coverage for designer/autopilot paths under **`tests/test_integration`** or marked **`integration`**.
+
+---
+
+## Phase 11 · P11-1 — Structured Logging
+
+### What does “structured logging” mean here?
+
+Each log line is rendered as **JSON** at **`INFO`** and above ( **`DEBUG`** switches to **structlog’s console renderer** ), with stable keys such as **`level`**, **`timestamp`**, **`event`**, **`request_id`**, **`correlation_id`**, **`duration_ms`**, and **`service_version`**. That makes logs **machine-parseable** in ELK/Loki/CloudWatch instead of ad-hoc prose.
+
+### Where is structlog configured?
+
+**`app.observability.logging_setup.configure_logging`** is invoked from the FastAPI **lifespan** in **`app.main`**. It merges **context vars** per request, attaches **exception/traceback** fields for failures, and aligns **uvicorn** log levels with **`LOG_LEVEL`**.
+
+### How are `request_id` and `correlation_id` propagated?
+
+The HTTP middleware binds **`X-Request-ID`** (generated if missing), accepts an optional **`X-Correlation-ID`**, echoes both on the response, and includes them in structlog’s context so every handler log line for that request shares the same identifiers.
+
+### Why bind `autopilot_build_id` only on some routes?
+
+**`POST /api/autopilot/build`** calls **`bind_build_context(build.id)`** so enqueue logs are **correlated to a build** without forcing every endpoint to know about Autopilot IDs. Other routes still get **request-level** IDs.
+
+### Interview trap: Does structured logging replace Prometheus?
+
+**No** — logs answer **“what happened for this request?”**; metrics answer **“how often and how fast in aggregate?”**. **P11-2** complements **P11-1**.
+
+---
+
+## Phase 11 · P11-2 — Prometheus Metrics
+
+### Which new series does the API expose beyond P4.5-6 guardrail metrics?
+
+Counters and histograms prefixed with **`rag_http_`** capture **request volume** and **latency** by **normalized route template** (from Starlette’s **`route.path`**) and **HTTP method**, plus **`rag_autopilot_*`** and **`rag_evaluation_runs_*`** for **Celery terminals**. Guardrail metrics remain **`rag_guardrail_*`**.
+
+### Why use route templates as label values?
+
+Using **literal paths** (e.g. UUIDs in URLs) creates **Exploding cardinality** and can **crash Prometheus**. **Templates** collapse `/api/autopilot/build/…` variants into **`/api/autopilot/build/{build_id}`**-style keys after label sanitisation.
+
+### Where is `/metrics` defined?
+
+FastAPI **`app.routers.monitoring`** registers **`GET /metrics`** (**OpenMetrics**) when **`PROMETHEUS_METRICS_ENABLED`** is **`true`** ( **`app.config.Settings`** ); otherwise the endpoint returns **404**.
+
+### What is `/monitoring/rag`?
+
+A **JSON listing** of all samples whose Prometheus **collector metric name** starts with **`rag_`** — combining **guardrail**, **HTTP**, and **business** exporters for quick dashboards **without PromQL**.
+
+### How do Grafana and Prometheus join the Compose stack?
+
+**`docker/docker-compose.observability.yml`** adds **`prometheus`** (scrapes **`http://api:8000/metrics`**) and **`grafana`** (pre-provisioned **Prometheus** datasource under **`docker/grafana/provisioning/`**). Merge it **after** the base Compose files sharing **`name: rag-studio`** so both attach to **`rag-network`**.
+
+### Interview trap: Do Celery workers expose `/metrics`?
+
+**No** — this phase records **evaluation**/**Autopilot terminals** inside **worker processes** into the **shared in-process registry** only when **`record_*`** helpers run **in that process**. Separate **worker scrape targets** would need **`prometheus_multiproc`**, a sidecar exporter, or a **pushgateway** pattern (future hardening).
+
+---
+
+## Phase 11 · P11-3 — Cost & Usage Analytics
+
+### What does `GET /api/analytics/summary` return?
+
+Scoped to the acting user (**`X-User-ID`** or **`DEFAULT_USER_ID`**), it aggregates **counts** from **`projects`**, **`pipeline_configs`**, **`autopilot_builds`** (by **status**), **`evaluation_runs`**, **`deployments`**, a **documents hint** (sum of **`document_ids`** lengths in requirements JSON), plus **`cost_signals`** (mean **`cost_per_query`** from **`result.metrics`** when present, mean **`budget_constraint`** from **`requirements`** when present).
+
+### Is this billing-accurate cost data?
+
+**No** — persisted **Estimator**/`BuildResult`-like fields are **planning proxies**. True spend needs **vendor invoices**, **token meters**, **vector storage GB**, etc.
+
+### Why is the frontend page at `/analytics`?
+
+**`apps/web/src/app/analytics/page.tsx`** fetches **`/api/analytics/summary`** via the Next.js **`/api/*` rewrite**, keeping **same-origin calls** consistent with **`apiClient`**. **Navbar** links expose it alongside **Templates**.
+
+### What are the aggregation SQL patterns?
+
+Prefer **`JOIN Project`** (and **`JOIN PipelineConfig`** for evaluation/deployments) with **`deleted_at IS NULL`** and **`user_id = :acting_user`** to mirror **ownership rules** elsewhere in **`ProjectService`** / routers.
+
+### Interview trap: Should analytics reuse the existing cost calculation service?
+
+Only when you need **live catalog math** against a Designer payload. **`P11-3`** optimises for **portfolio rollups already stored on rows** (`AutopilotBuild`) so dashboards stay cheap and deterministic.
 
 ---
 

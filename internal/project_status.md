@@ -82,20 +82,20 @@
 | 68 | Phase 8 | P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | Add evaluation execution/history/compare backend endpoints. | ✅ done |
 | 69 | Phase 8 | P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | Add deployment trigger/status/list/teardown backend endpoints. | ✅ done |
 |  | `Phase 9` | `Add MLflow experiment tracking for reproducibility across Autopilot runs.` |  |  |  |
-| 70 | Phase 9 | P9-1 · MLflow Integration | `feature/p9-mlflow-integration` | Add experiment tracking for autopilot runs, metrics, params, and artifacts. | ⬜ pending |
+| 70 | Phase 9 | P9-1 · MLflow Integration | `feature/p9-mlflow-integration` | Add experiment tracking for autopilot runs, metrics, params, and artifacts. | ✅ done |
 |  | `Phase 10` | `Achieve comprehensive quality gates through unit, integration, and end-to-end testing.` |  |  |  |
-| 71 | Phase 10 | P10-1 · Backend Unit Tests | `feature/p10-backend-unit-tests` | Build backend unit test suites and target high coverage. | ⬜ pending |
-| 72 | Phase 10 | P10-2 · Backend Integration Tests | `feature/p10-backend-integration-tests` | Build backend integration tests for designer/autopilot/evaluation flows. | ⬜ pending |
-| 73 | Phase 10 | P10-3 · Frontend Unit Tests | `feature/p10-frontend-unit-tests` | Build frontend component/store/unit tests with coverage targets. | ⬜ pending |
-| 74 | Phase 10 | P10-4 · End-to-End Tests | `feature/p10-e2e-tests` | Build Playwright end-to-end tests for key user journeys. | ⬜ pending |
+| 71 | Phase 10 | P10-1 · Backend Unit Tests | `feature/p10-backend-unit-tests` | Build backend unit test suites and target high coverage. | ✅ done |
+| 72 | Phase 10 | P10-2 · Backend Integration Tests | `feature/p10-backend-integration-tests` | Build backend integration tests for designer/autopilot/evaluation flows. | ✅ done |
+| 73 | Phase 10 | P10-3 · Frontend Unit Tests | `feature/p10-frontend-unit-tests` | Build frontend component/store/unit tests with coverage targets. | ✅ done |
+| 74 | Phase 10 | P10-4 · End-to-End Tests | `feature/p10-e2e-tests` | Build Playwright end-to-end tests for key user journeys. | ✅ done |
 |  | `Phase 11` | `Implement production-grade observability with structured logs, metrics, and analytics.` |  |  |  |
-| 75 | Phase 11 | P11-1 · Structured Logging | `feature/p11-structured-logging` | Implement structured logging and request/agent traceability. | ⬜ pending |
-| 76 | Phase 11 | P11-2 · Prometheus Metrics | `feature/p11-prometheus-metrics` | Add metrics endpoint, custom metrics, and Prometheus/Grafana integration. | ⬜ pending |
-| 77 | Phase 11 | P11-3 · Cost & Usage Analytics | `feature/p11-usage-analytics` | Add usage/cost analytics APIs and frontend analytics page. | ⬜ pending |
+| 75 | Phase 11 | P11-1 · Structured Logging | `feature/p11-structured-logging` | Implement structured logging and request/agent traceability. | ✅ done |
+| 76 | Phase 11 | P11-2 · Prometheus Metrics | `feature/p11-prometheus-metrics` | Add metrics endpoint, custom metrics, and Prometheus/Grafana integration. | ✅ done |
+| 77 | Phase 11 | P11-3 · Cost & Usage Analytics | `feature/p11-usage-analytics` | Add usage/cost analytics APIs and frontend analytics page. | ✅ done |
 |  | `Phase 12` | `Harden security and performance, then execute production deployment and launch.` |  |  |  |
-| 78 | Phase 12 | P12-1 · Authentication & Authorization | `feature/p12-auth` | Implement auth flows, endpoint protection, and user-level access control. | ⬜ pending |
-| 79 | Phase 12 | P12-2 · Security Hardening | `feature/p12-security-hardening` | Implement security controls, validation, rate limits, and scanning. | ⬜ pending |
-| 80 | Phase 12 | P12-3 · Performance Optimisation | `feature/p12-performance` | Tune performance across cache, DB, API, frontend, and load handling. | ⬜ pending |
-| 81 | Phase 12 | P12-4 · Kubernetes Production Manifests | `feature/p12-kubernetes-manifests` | Create production-ready Kubernetes manifests and verify deployment. | ⬜ pending |
-| 82 | Phase 12 | P12-5 · Final Documentation Pass | `feature/p12-documentation` | Complete product docs, guides, API references, and README polish. | ⬜ pending |
-| 83 | Phase 12 | P12-6 · Production Deployment & Launch | `feature/p12-production-launch` | Execute release, staging validation, production rollout, and release notes. | ⬜ pending |
+| 78 | Phase 12 | P12-1 · Authentication & Authorization | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | Implement auth flows, endpoint protection, and user-level access control. | ✅ done |
+| 79 | Phase 12 | P12-2 · Security Hardening | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | Implement security controls, validation, rate limits, and scanning. | ✅ done |
+| 80 | Phase 12 | P12-3 · Performance Optimisation | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | Tune performance across cache, DB, API, frontend, and load handling. | ✅ done |
+| 81 | Phase 12 | P12-4 · Kubernetes Production Manifests | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | Create production-ready Kubernetes manifests and verify deployment. | ✅ done |
+| 82 | Phase 12 | P12-5 · Final Documentation Pass | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | Complete product docs, guides, API references, and README polish. | ✅ done |
+| 83 | Phase 12 | P12-6 · Production Deployment & Launch | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | Execute release, staging validation, production rollout, and release notes. | ✅ done |

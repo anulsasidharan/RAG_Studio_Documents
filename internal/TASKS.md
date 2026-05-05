@@ -68,3 +68,37 @@
 | P8-2 · Autopilot → Designer Visualization | `feature/p8-autopilot-to-designer` | ✅ done |
 | P8-3 · Evaluation API Endpoints | `feature/p8-evaluation-api` | ✅ done |
 | P8-4 · Deployment API Endpoints | `feature/p8-deployment-api` | ✅ done |
+
+## Phase 9 — MLflow experiment tracking
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P9-1 · MLflow Integration | `feature/p9-mlflow-integration` | ✅ done |
+
+## Phase 10 — Testing & quality gates
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P10-1 · Backend Unit Tests | `feature/p10-backend-unit-tests` | ✅ done |
+| P10-2 · Backend Integration Tests | `feature/p10-backend-integration-tests` | ✅ done |
+| P10-3 · Frontend Unit Tests | `feature/p10-frontend-unit-tests` | ✅ done |
+| P10-4 · End-to-End Tests | `feature/p10-e2e-tests` | ✅ done |
+
+## Phase 11 — Production-grade observability
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P11-1 · Structured Logging | `feature/p11-structured-logging` | ✅ done |
+| P11-2 · Prometheus Metrics | `feature/p11-prometheus-metrics` | ✅ done |
+| P11-3 · Cost & Usage Analytics | `feature/p11-usage-analytics` | ✅ done |
+
+## Phase 12 — Harden security and performance, then production launch
+
+| Task | Branch | Status |
+|------|--------|--------|
+| P12-1 · Authentication & Authorization | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | ✅ done |
+| P12-2 · Security Hardening | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | ✅ done |
+| P12-3 · Performance Optimisation | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | ✅ done |
+| P12-4 · Kubernetes Production Manifests | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | ✅ done |
+| P12-5 · Final Documentation Pass | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | ✅ done |
+| P12-6 · Production Deployment & Launch | `feature/p12-Harden-security-auth-k8s-prod-deplloy` | ✅ done |
